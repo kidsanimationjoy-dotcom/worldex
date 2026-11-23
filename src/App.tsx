@@ -407,9 +407,10 @@ function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreate
   const providerFor = (name: string) => providers.find((provider) => provider.id === oauthProviderForConnector[name]);
   const connectedFor = (name: string) => providerConnections.find((connection) => connection.provider === oauthProviderForConnector[name] && connection.status === "connected");
   const openConnector = (connector: { name: string; note: string; state: string; category: string }) => {
+    const connection = connectedFor(connector.name) ?? null;
     setSelectedConnector(connector);
-    setSelectedConnection(connectedFor(connector.name) ?? null);
-    setSelectedScopes(defaultScopesForConnector(connector.name));
+    setSelectedConnection(connection);
+    setSelectedScopes([...new Set([...defaultScopesForConnector(connector.name), ...(connection?.scopeCategories ?? [])])]);
     setApiMessage("");
   };
   const matching = connectionGroups.flatMap((group) => group.items.map((item) => ({ ...item, category: group.category })))
