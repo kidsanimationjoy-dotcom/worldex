@@ -1,16 +1,30 @@
-# Status as of Session 3 (read this first)
+# Current implementation status — 2026-11-24
 
-Verified (Node-only): server auth safe-read fix, `IN (?)` placeholder fix, opt-in migrations — 19 tests pass. NOT verified: everything that
-needs dependencies, a browser or MySQL. Nothing below is implemented unless it says so.
+Main includes the Universal Connect OAuth foundation, merged in PR #1 (commit `11c1887a36ed42b04ff1bd6d9cf689cca63e686c`).
 
-## Next, in order (needs network + Docker + Chromium; run `pnpm verify` first and record real output)
-1. Baseline: `pnpm install --frozen-lockfile`, `typecheck`, `build`, `test`. Fix whatever fails before adding features.
-2. Run `scripts/test-db.sh` then `pnpm test:mysql` against the disposable DB. Read the DIAGNOSTIC output; fix suite/repository as needed.
-3. Server additions (each with tests): `DELETE /api/workspaces/:id` with name confirmation; optimistic version check on `PUT /api/state` (draft migration 0002, review only, do not apply); explicit connection-grant endpoints; task approval/status already exist server-side.
-4. Frontend: `/auth/callback` route that POSTs `code`/`state`; auth gate via `GET /api/auth/me`; logout; 401 handling; load `/api/state`; stop using `localStorage` as authority.
-5. One-time, user-approved legacy import of `worldex.mvp.state.v1` (preview counts, explicit confirm, never silent, never overwrite non-empty server data).
-6. Persistent workspace/chat operations with save-error and stale-snapshot handling; task approve/reject/poll UI.
-7. 3D globe (React Three Fiber) fed only by real workspaces and real connection records; 2D canvas/SVG fallback; reduced motion; touch/zoom; Playwright interaction tests.
+## Verified in GitHub Actions on the merged feature-branch head
+- Dependency installation: PASS.
+- TypeScript typecheck: PASS.
+- Unit tests: 69 total; 49 passed, 0 failed, 20 skipped because no dedicated `WORLDEX_TEST_DATABASE_URL` was configured.
+- Vite production build: PASS.
+- Server syntax checks: PASS.
+- The database migration and live Google/GitHub/LinkedIn OAuth flows were not run.
+
+## Implemented
+- React/Vite frontend, Express/MySQL API and Manus session/authentication foundation.
+- Workspace/task API ownership checks, database migration 0001, audit/rate-limit and approval/task records.
+- Universal Connect marketplace with signed-in state, workspace-save flow, permission picker, account list and disconnect flow.
+- Google, GitHub and LinkedIn OAuth Authorization Code/PKCE adapters, one-time OAuth state, AES-256-GCM encrypted token storage, internal workspace-scoped token access and refresh where supported.
+- Provider disconnect attempts: Google OAuth revocation endpoint and GitHub grant deletion; LinkedIn local token removal with a clear notice that provider-side removal must be completed in LinkedIn settings.
+- Migration 0002, provider setup/API documentation, OAuth tests and CI workflow.
+
+## Next steps, in order
+1. Platform owner / eligible account holder must register WORLDEX provider apps, complete any provider review and add the exact callback URLs. Configure the server-only client IDs, client secrets and `WORLDEX_TOKEN_ENCRYPTION_KEY` in the actual deployment secret manager. These external account and secret-manager actions are not accessible through the current GitHub repository integration.
+2. Review migration `db/migrations/0002_provider_oauth.sql`, back up the managed database and apply with `pnpm db:migrate` in the deployment environment. Do not reset or automatically migrate the shared database.
+3. Run Google, GitHub and LinkedIn OAuth consent/token-exchange tests against staging apps; run the isolated MySQL suite with a dedicated `WORLDEX_TEST_DATABASE_URL`.
+4. Finish the global React auth/state integration: most workspace/chat UI still uses browser `localStorage`; Universal Connect has only its own sign-in and workspace-save path. Add the explicit one-time legacy import, server-authoritative state, logout/401 handling and persistent workspace/chat operations.
+5. Build and test provider API actions separately (Drive/Gmail/Analytics/GitHub/LinkedIn actions as approved). OAuth by itself does not enable publishing, messaging, ads, commerce or automation.
+6. Continue remaining product work such as task approval/poll UI, MySQL optimistic version checks and the 3D globe. Do not claim production readiness until the relevant live tests and deployment checks pass.
 
 ---
 
