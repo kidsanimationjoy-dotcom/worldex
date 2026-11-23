@@ -6,3 +6,4 @@ tsconfig.tsbuildinfo
 !.env.example
 .DS_Store
 verification-output/
+.netlify/
