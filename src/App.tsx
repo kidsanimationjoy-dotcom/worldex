@@ -325,7 +325,34 @@ export default function App() {
         {page === "workspaces" && <WorkspaceView current={current} workspaces={state.workspaces} policies={state.accessPolicies} onSwitch={switchWorkspace} onNew={() => setCreatingWorkspace(true)} onOpenSettings={() => setPage("settings")} />}
         {page === "opportunities" && <OpportunityFinder />}
         {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onServerWorkspaceReady={() => { setAccountWorkspaceReady(true); setAccountSyncStatus("saved"); }} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
-        {page === "settings" && <SettingsView workspace={current} state={state} updateWorkspace={updateWorkspace} setOverview={(value) => setState((previous) => ({ ...previous, crossWorkspaceOverview: value }))} onReset={() => { if (window.confirm("Delete the locally saved WORLDEX data in this browser? This cannot be undone.")) { localStorage.removeItem("worldex.mvp.state.v1"); setState(blankState()); } }} />}
+        {page === "settings" && <SettingsView workspace={current} state={state} updateWorkspace={updateWorkspace} setOverview={(value) => setState((previous) => ({ ...previous, crossWorkspaceOverview: value }))} onReset={() => { void (async () => {
+          const accountMode = accountWorkspaceReady;
+          const prompt = accountMode
+            ? "Delete all WORLDEX workspace data from your signed-in account? This cannot be undone."
+            : "Delete the locally saved WORLDEX data in this browser? This cannot be undone.";
+          if (!window.confirm(prompt)) return;
+          if (accountMode) {
+            setAccountSyncStatus("saving");
+            try {
+              const response = await fetch("/api/state", {
+                method: "DELETE",
+                credentials: "same-origin",
+                headers: { "X-CSRF-Token": accountCsrfToken },
+              });
+              const data = await response.json();
+              if (!response.ok) throw new Error(data.error?.message ?? "Account workspace data could not be deleted");
+            } catch (error) {
+              setAccountSyncStatus("error");
+              window.alert(error instanceof Error ? error.message : "Account workspace data could not be deleted");
+              return;
+            }
+          } else {
+            localStorage.removeItem("worldex.mvp.state.v1");
+          }
+          setAccountWorkspaceReady(false);
+          setAccountSyncStatus("local");
+          setState(blankState());
+        })(); }} />}
         {page === "status" && <StatusView />}
         {page === "dropship" && <DropshipView />}
         {page === "games" && <GameStudioView workspace={current} updateWorkspace={(update, label) => updateWorkspace(current.id, update, label)} />}
