@@ -109,3 +109,18 @@ test("internal token access enforces scope groups and returns plaintext only to 
   await assert.rejects(service.getAccessToken({userId:"user-1",workspaceId:"ws-1",connectionId:saved.id,requiredScope:"Messages"}),/not authorized/);
   await assert.rejects(service.getAccessToken({userId:"other-user",workspaceId:"ws-1",connectionId:saved.id}),/not found/);
 });
+
+test("the service stores only permission groups present in the provider token response", async () => {
+  const repo=fakeRepo();
+  const service=createConnectorOAuthService({
+    repo,env,
+    fetchImpl:async (url)=>String(url).includes("/accessToken")
+      ? {ok:true,json:async()=>({access_token:"linkedin-access",expires_in:3600,scope:"openid profile email"})}
+      : {ok:true,json:async()=>({sub:"linkedin-member-1",email:"member@example.com",name:"Member"})},
+  });
+  const started=await service.start({userId:"user-2",workspaceId:"ws-2",providerId:"linkedin",requestedScopes:["Profile","Publishing"],redirectOrigin:"https://worldex.example"});
+  const state=new URL(started.authorizationUrl).searchParams.get("state");
+  const saved=await service.complete({providerId:"linkedin",state,code:"linkedin-code"});
+  assert.deepEqual(saved.scopeCategories,["Profile"]);
+  assert.equal(saved.status,"connected");
+});
