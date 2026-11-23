@@ -47,11 +47,6 @@ function fail(status, code, message) {
   return error;
 }
 const b64url = (value) => Buffer.from(value).toString("base64url");
-const safeEqualText = (left, right) => {
-  const a = Buffer.from(String(left ?? ""));
-  const b = Buffer.from(String(right ?? ""));
-  return a.length === b.length && a.length > 0 && a.equals(b);
-};
 function encryptionKey(env) {
   const raw = env.WORLDEX_TOKEN_ENCRYPTION_KEY;
   if (typeof raw !== "string" || !raw) return null;
@@ -195,13 +190,16 @@ export function createConnectorOAuthService({ repo, env = process.env, fetchImpl
     const providerScopes = typeof tokenResponse.scope === "string"
       ? tokenResponse.scope.split(/[ ,]+/).filter(Boolean)
       : transaction.scopes.flatMap((scope) => config.scopes[scope]);
+    const grantedScopeCategories = Object.entries(config.scopes)
+      .filter(([, requiredScopes]) => requiredScopes.every((scope) => providerScopes.includes(scope)))
+      .map(([category]) => category);
     const expiresAt = Number.isFinite(Number(tokenResponse.expires_in)) && Number(tokenResponse.expires_in) > 0
       ? new Date(now() + Number(tokenResponse.expires_in) * 1000)
       : null;
     const connection = await repo.saveProviderConnection({
       id: uuid(), userId: transaction.userId, workspaceId: transaction.workspaceId, provider: providerId,
       providerAccountId: identity.accountId, accountLabel: String(identity.label || config.name).slice(0, 160),
-      scopeCategories: transaction.scopes, providerScopes, accessTokenCiphertext: encryptSecret(tokenResponse.access_token, key),
+      scopeCategories: grantedScopeCategories.length ? grantedScopeCategories : transaction.scopes, providerScopes, accessTokenCiphertext: encryptSecret(tokenResponse.access_token, key),
       refreshTokenCiphertext: typeof tokenResponse.refresh_token === "string" ? encryptSecret(tokenResponse.refresh_token, key) : null,
       tokenType: typeof tokenResponse.token_type === "string" ? tokenResponse.token_type.slice(0, 32) : "Bearer",
       expiresAt,
