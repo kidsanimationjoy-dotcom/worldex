@@ -124,3 +124,45 @@ test("the service stores only permission groups present in the provider token re
   assert.deepEqual(saved.scopeCategories,["Profile"]);
   assert.equal(saved.status,"connected");
 });
+
+test("Google disconnect revokes the refresh token at Google's OAuth revocation endpoint", async () => {
+  const calls=[];
+  const repo={async getProviderConnectionSecrets(){return {
+    id:"connection-1",provider:"google",status:"connected",scopeCategories:["Profile"],
+    accessTokenCiphertext:encryptSecret("access-token",key),refreshTokenCiphertext:encryptSecret("refresh-token",key),
+  };}};
+  const service=createConnectorOAuthService({repo,env,fetchImpl:async (url,options)=>{
+    calls.push({url:String(url),options});
+    return {ok:true,status:200};
+  }});
+  assert.deepEqual(await service.revokeConnection({userId:"u",workspaceId:"w",connectionId:"connection-1"}),{revoked:true,supported:true});
+  assert.equal(calls[0].url,"https://oauth2.googleapis.com/revoke");
+  assert.equal(new URLSearchParams(calls[0].options.body).get("token"),"refresh-token");
+});
+test("GitHub disconnect removes the OAuth app grant with its registered app credentials", async () => {
+  let call;
+  const repo={async getProviderConnectionSecrets(){return {
+    id:"connection-2",provider:"github",status:"connected",scopeCategories:["Profile"],
+    accessTokenCiphertext:encryptSecret("github-access",key),refreshTokenCiphertext:null,
+  };}};
+  const service=createConnectorOAuthService({repo,env,fetchImpl:async (url,options)=>{
+    call={url:String(url),options};
+    return {ok:true,status:204};
+  }});
+  const result=await service.revokeConnection({userId:"u",workspaceId:"w",connectionId:"connection-2"});
+  assert.deepEqual(result,{revoked:true,supported:true});
+  assert.match(call.url,/api\.github\.com\/applications\/github-client\/grant$/);
+  assert.equal(call.options.method,"DELETE");
+  assert.equal(JSON.parse(call.options.body).access_token,"github-access");
+  assert.match(call.options.headers.Authorization,/^Basic /);
+});
+test("LinkedIn disconnect does not claim provider revocation where no supported endpoint is documented", async () => {
+  const repo={async getProviderConnectionSecrets(){return {
+    id:"connection-3",provider:"linkedin",status:"connected",scopeCategories:["Profile"],
+    accessTokenCiphertext:encryptSecret("linkedin-access",key),refreshTokenCiphertext:null,
+  };}};
+  let called=false;
+  const service=createConnectorOAuthService({repo,env,fetchImpl:async()=>{called=true;throw new Error("unexpected");}});
+  assert.deepEqual(await service.revokeConnection({userId:"u",workspaceId:"w",connectionId:"connection-3"}),{revoked:false,supported:false});
+  assert.equal(called,false);
+});
