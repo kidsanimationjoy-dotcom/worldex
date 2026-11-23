@@ -2,7 +2,7 @@ import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { csrfTokenForSession, isTrustedSafeRead, makeCookie, OAUTH_NONCE_COOKIE, SESSION_COOKIE, sha256 } from "./security.mjs";
+import { constantTimeEqual, csrfTokenForSession, isTrustedSafeRead, makeCookie, OAUTH_NONCE_COOKIE, parseOAuthState, SESSION_COOKIE, sha256 } from "./security.mjs";
 import { authError } from "./auth-service.mjs";
 import { ValidationError, parseAppState, parseTaskRequest } from "./validation.mjs";
 
@@ -77,6 +77,34 @@ export function createApp({ repo, auth, provider, connections, env = process.env
     const started = auth.startOAuth(req.get("Origin"));
     res.setHeader("Set-Cookie", makeCookie(OAUTH_NONCE_COOKIE, started.nonce, { secure: started.secure, maxAge: 300 }));
     json(res, 200, { authorizationUrl: started.authorizationUrl });
+  }));
+  app.get("/auth/callback", run(async (req,res) => {
+    if (!(await rate(req,res,"manus-oauth-browser-callback",10,600))) return;
+    const state=typeof req.query.state==="string"?req.query.state:"";
+    const parsed=parseOAuthState(state);
+    if (!parsed || typeof parsed.redirectUri!=="string") throw authError(400,"oauth_state_invalid","The sign-in response could not be verified");
+    let origin;
+    try {
+      const redirect=new URL(parsed.redirectUri);
+      origin=redirect.origin;
+      if (redirect.href!==`${origin}/auth/callback`) throw new Error("redirect mismatch");
+      auth.requireOrigin(origin);
+    } catch { throw authError(400,"oauth_redirect_invalid","The sign-in redirect is not allowed"); }
+    const nonceCookie=cookieValue(req,OAUTH_NONCE_COOKIE);
+    if (!constantTimeEqual(parsed.nonce,nonceCookie??"")) throw authError(400,"oauth_state_mismatch","The sign-in response could not be verified");
+    if (typeof req.query.error==="string") {
+      res.setHeader("Set-Cookie",makeCookie(OAUTH_NONCE_COOKIE,"",{secure:new URL(origin).protocol==="https:",maxAge:0}));
+      const failed=new URL("/",origin); failed.searchParams.set("worldex_auth","failed");
+      return res.redirect(303,failed.toString());
+    }
+    const result=await auth.finishOAuth({code:req.query.code,state,nonceCookie,origin});
+    const secure=result.secure;
+    res.setHeader("Set-Cookie",[
+      makeCookie(SESSION_COOKIE,result.token,{secure,maxAge:auth.sessionMaxAgeSeconds}),
+      makeCookie(OAUTH_NONCE_COOKIE,"",{secure,maxAge:0}),
+    ]);
+    const success=new URL("/",origin); success.searchParams.set("worldex_auth","connected");
+    return res.redirect(303,success.toString());
   }));
   app.post("/api/auth/oauth/callback", run(async (req, res) => {
     if (!(await rate(req, res, "oauth-callback", 10, 600))) return;
