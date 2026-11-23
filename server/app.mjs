@@ -188,8 +188,9 @@ export function createApp({ repo, auth, provider, connections, env = process.env
     const workspaceId=typeof req.body?.workspaceId==="string"?req.body.workspaceId:"";
     if (!workspaceId) throw new ValidationError("workspaceId is required");
     if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    const revocation=await connections.revokeConnection({userId:req.auth.user.id,workspaceId,connectionId:req.params.connectionId});
     if (!(await repo.disconnectProviderConnection(req.auth.user.id,workspaceId,req.params.connectionId))) throw authError(404,"connection_not_found","Connection not found");
-    json(res,200,{ok:true,providerAccessRevoked:false,localTokensDeleted:true});
+    json(res,200,{ok:true,providerAccessRevoked:revocation.revoked,providerRevocationSupported:revocation.supported,localTokensDeleted:true});
   }));
 
   app.get("/api/state", run(async (req, res) => {
