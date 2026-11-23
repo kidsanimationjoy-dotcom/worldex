@@ -410,7 +410,8 @@ function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreate
     const connection = connectedFor(connector.name) ?? null;
     setSelectedConnector(connector);
     setSelectedConnection(connection);
-    setSelectedScopes([...new Set([...defaultScopesForConnector(connector.name), ...(connection?.scopeCategories ?? [])])]);
+    const existingScopes = (connection?.scopeCategories ?? []).filter((scope): scope is ResourceScope => resourceScopes.includes(scope as ResourceScope));
+    setSelectedScopes([...new Set<ResourceScope>([...defaultScopesForConnector(connector.name), ...existingScopes])]);
     setApiMessage("");
   };
   const matching = connectionGroups.flatMap((group) => group.items.map((item) => ({ ...item, category: group.category })))
