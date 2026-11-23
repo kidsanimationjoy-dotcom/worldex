@@ -78,7 +78,7 @@ export function createMysqlRepository(pool) {
           (id,user_id,workspace_id,provider,provider_account_id,account_label,scope_categories,provider_scopes,access_token_ciphertext,refresh_token_ciphertext,token_type,expires_at,status,connected_at,disconnected_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'connected',UTC_TIMESTAMP(3),NULL)
          ON DUPLICATE KEY UPDATE account_label=VALUES(account_label),scope_categories=VALUES(scope_categories),provider_scopes=VALUES(provider_scopes),
-          access_token_ciphertext=VALUES(access_token_ciphertext),refresh_token_ciphertext=VALUES(refresh_token_ciphertext),
+          access_token_ciphertext=VALUES(access_token_ciphertext),refresh_token_ciphertext=COALESCE(VALUES(refresh_token_ciphertext),refresh_token_ciphertext),
           token_type=VALUES(token_type),expires_at=VALUES(expires_at),status='connected',updated_at=UTC_TIMESTAMP(3),disconnected_at=NULL`,
         [connection.id,connection.userId,connection.workspaceId,connection.provider,connection.providerAccountId,connection.accountLabel,JSON.stringify(connection.scopeCategories),JSON.stringify(connection.providerScopes),connection.accessTokenCiphertext,connection.refreshTokenCiphertext,connection.tokenType,connection.expiresAt?sqlDate(connection.expiresAt):null],
       );
