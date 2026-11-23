@@ -34,3 +34,59 @@
 
 /* Workspace-local activity timeline and shortcut density */
 .activity-panel{min-height:126px}.activity-event-list{display:grid;margin-top:10px}.activity-event-list>div{display:flex;align-items:flex-start;gap:8px;border-top:1px solid rgba(151,166,201,.07);padding:7px 0}.activity-event-dot{width:6px;height:6px;border-radius:50%;background:var(--workspace-accent);box-shadow:0 0 7px color-mix(in srgb,var(--workspace-accent) 45%,transparent);margin-top:3px;flex:0 0 6px}.activity-event-list>div>span:last-child{display:grid;gap:3px;min-width:0}.activity-event-list b{font-size:8px;color:#b9c4d4;font-weight:600}.activity-event-list small{font:7px var(--mono);color:#66748a}.activity-empty{display:flex;align-items:center;gap:7px;padding:18px 0 5px;font-size:8px;color:#76839a}.sidebar-new-chat kbd{font-size:6px;letter-spacing:-.035em;padding:2px 3px}
+
+
+/* Universal Connect marketplace */
+.connect-page .connect-boundary{align-items:flex-start}
+.integration-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 24px}
+.integration-card{min-width:0;display:flex;flex-direction:column;gap:13px;padding:15px;border:1px solid rgba(125,151,194,.16);border-radius:12px;background:linear-gradient(145deg,rgba(20,29,46,.88),rgba(12,18,31,.9));transition:border-color .18s ease,transform .18s ease}
+.integration-card:hover{border-color:rgba(93,139,255,.42);transform:translateY(-2px)}
+.integration-card-top,.integration-card-footer{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.integration-icon{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;color:#8eb2ff;background:rgba(73,120,235,.13);border:1px solid rgba(99,145,255,.18)}
+.integration-status{display:inline-flex;align-items:center;gap:6px;color:#8d9bb0;font:7px var(--mono);text-transform:uppercase;letter-spacing:.06em}
+.integration-status i{width:6px;height:6px;border-radius:50%;background:#78869c}
+.integration-card-copy{display:grid;gap:5px;min-height:72px}
+.integration-card-copy h3{margin:0;color:#e4ebf7;font-size:13px;font-weight:650}
+.integration-category{color:#7f9fe4;font:7px var(--mono);text-transform:uppercase;letter-spacing:.09em}
+.integration-card-copy p{margin:3px 0 0;color:#8997ac;font-size:9px;line-height:1.55}
+.integration-card-footer{padding-top:10px;border-top:1px solid rgba(145,163,197,.1)}
+.integration-card-footer>small{color:#75839a;font:7px var(--mono)}
+.integration-connect-button{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid rgba(100,143,239,.27);border-radius:7px;background:rgba(66,111,220,.12);color:#b6ccff;font-size:8px;font-weight:650;cursor:pointer}
+.integration-connect-button:hover{background:rgba(66,111,220,.22);border-color:rgba(100,143,239,.5)}
+.integration-modal{max-width:440px}
+.integration-permission-panel{display:grid;gap:9px;margin:15px 0;padding:13px;border:1px solid rgba(114,146,197,.17);border-radius:9px;background:rgba(18,28,45,.62)}
+.integration-permission-panel>b{margin-bottom:2px;color:#dbe5f7;font-size:9px}
+.integration-permission-panel>span{display:flex;align-items:flex-start;gap:7px;color:#9eacc1;font-size:8px;line-height:1.5}
+.integration-permission-panel>span svg{flex:0 0 auto;color:#78a5ff}
+.integration-setup-note{display:flex;align-items:flex-start;gap:8px;padding:10px;border:1px solid rgba(225,174,82,.2);border-radius:8px;background:rgba(225,174,82,.06);color:#c4ad7f;font-size:8px;line-height:1.55}
+.integration-setup-note svg{flex:0 0 auto;margin-top:1px}
+@media(max-width:900px){.integration-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.integration-grid{grid-template-columns:1fr}.integration-card{padding:13px}.integration-card-copy{min-height:0}}
+
+
+/* Authenticated connector session and permission selection */
+.connector-session-panel{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:14px 0;padding:13px 15px;border:1px solid rgba(99,132,196,.2);border-radius:10px;background:linear-gradient(120deg,rgba(25,38,62,.7),rgba(16,23,37,.8))}
+.connector-session-copy{display:grid;gap:5px;min-width:0}
+.connector-session-copy>b{font-size:10px;color:#dce6f8}
+.connector-session-copy>p{font-size:8px;line-height:1.6;color:#8e9db4;margin:0}
+.connector-session-panel>.primary-button{height:33px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.connector-session-ready{display:inline-flex;align-items:center;gap:6px;color:#82d8ba;font:8px var(--mono);white-space:nowrap}
+.connector-notice,.connector-error{display:flex;align-items:flex-start;gap:8px;margin:9px 0;padding:10px 12px;border-radius:8px;font-size:8px;line-height:1.55}
+.connector-notice{color:#a6dfc8;background:rgba(55,151,112,.09);border:1px solid rgba(78,180,136,.2)}
+.connector-error{color:#e0b1a6;background:rgba(174,76,64,.09);border:1px solid rgba(196,100,84,.22)}
+.connector-notice>svg,.connector-error>svg{flex:0 0 14px;margin-top:1px}
+.connector-notice>button,.connector-error>button{margin-left:auto;border:0;background:none;color:inherit;cursor:pointer}
+.integration-status.is-connected{color:#8bd6b7}
+.integration-status.is-connected i{background:#59c79c;box-shadow:0 0 8px rgba(89,199,156,.4)}
+.integration-account-label{display:block;margin-top:3px;color:#a8b6ce;font-size:8px;overflow-wrap:anywhere}
+.integration-connected-account{display:grid;gap:5px;margin:12px 0;padding:11px;border:1px solid rgba(78,180,136,.2);border-radius:8px;background:rgba(55,151,112,.08)}
+.integration-connected-account>b{font-size:10px;color:#dce9e4}
+.integration-connected-account>small{font-size:8px;color:#8aa99e}
+.integration-scope-option{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid rgba(145,163,197,.08);cursor:pointer}
+.integration-scope-option>input{accent-color:#6c96ff;flex:0 0 auto}
+.integration-scope-option>span{display:grid;gap:3px;flex:1}
+.integration-scope-option b{font-size:8px;color:#c8d4e6;font-weight:650}
+.integration-scope-option small{font-size:7px;color:#7f8fa8;line-height:1.4}
+.integration-scope-option em{font:7px var(--mono);color:#90a7d1;font-style:normal}
+.integration-scope-unavailable{font-size:8px;color:#8d9ab0;padding:7px 0}
+@media(max-width:560px){.connector-session-panel{align-items:flex-start;flex-direction:column}.connector-session-panel>.primary-button{width:100%;justify-content:center}.connector-session-ready{white-space:normal}}

@@ -2,7 +2,7 @@ import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { csrfTokenForSession, isTrustedSafeRead, makeCookie, OAUTH_NONCE_COOKIE, SESSION_COOKIE, sha256 } from "./security.mjs";
+import { constantTimeEqual, csrfTokenForSession, isTrustedSafeRead, makeCookie, OAUTH_NONCE_COOKIE, parseOAuthState, SESSION_COOKIE, sha256 } from "./security.mjs";
 import { authError } from "./auth-service.mjs";
 import { ValidationError, parseAppState, parseTaskRequest } from "./validation.mjs";
 
@@ -17,7 +17,7 @@ const cookieValue = (request, name) => {
 };
 const json = (response, status, body) => response.status(status).json(body);
 
-export function createApp({ repo, auth, provider, env = process.env, logger = console, staticDirectory = resolvePath(root, "dist") }) {
+export function createApp({ repo, auth, provider, connections, env = process.env, logger = console, staticDirectory = resolvePath(root, "dist") }) {
   if (!repo || !auth) throw new Error("Repository and authentication service are required");
   const app = express();
   app.disable("x-powered-by");
@@ -70,13 +70,41 @@ export function createApp({ repo, auth, provider, env = process.env, logger = co
     await repo.health();
     json(res, 200, { status: "ok", database: "ready" });
   }));
-  app.get("/api/status", (_req, res) => json(res, 200, { authConfigured: Boolean(env.MANUS_PROJECT_ID && env.MANUS_OAUTH_API_URL && env.MANUS_OAUTH_PORTAL_URL && env.MANUS_JWT_SECRET), databaseConfigured: Boolean(env.DATABASE_URL), llmConfigured: Boolean(provider?.llmConfigured), llmVerified: false, authProvider: "Manus OAuth", localPasswords: false }));
+  app.get("/api/status", (_req, res) => json(res, 200, { authConfigured: Boolean(env.MANUS_PROJECT_ID && env.MANUS_OAUTH_API_URL && env.MANUS_OAUTH_PORTAL_URL && env.MANUS_JWT_SECRET), databaseConfigured: Boolean(env.DATABASE_URL), llmConfigured: Boolean(provider?.llmConfigured), llmVerified: false, authProvider: "Manus OAuth", localPasswords: false, connectorTokenEncryptionConfigured: Boolean(connections?.isEncryptionConfigured), connectorProviders: connections?.listProviders().map(({id,name,configured,supportedScopes})=>({id,name,configured,supportedScopes})) ?? [] }));
 
   app.post("/api/auth/oauth/start", run(async (req, res) => {
     if (!(await rate(req, res, "oauth-start", 10, 600))) return;
     const started = auth.startOAuth(req.get("Origin"));
     res.setHeader("Set-Cookie", makeCookie(OAUTH_NONCE_COOKIE, started.nonce, { secure: started.secure, maxAge: 300 }));
     json(res, 200, { authorizationUrl: started.authorizationUrl });
+  }));
+  app.get("/auth/callback", run(async (req,res) => {
+    if (!(await rate(req,res,"manus-oauth-browser-callback",10,600))) return;
+    const state=typeof req.query.state==="string"?req.query.state:"";
+    const parsed=parseOAuthState(state);
+    if (!parsed || typeof parsed.redirectUri!=="string") throw authError(400,"oauth_state_invalid","The sign-in response could not be verified");
+    let origin;
+    try {
+      const redirect=new URL(parsed.redirectUri);
+      origin=redirect.origin;
+      if (redirect.href!==`${origin}/auth/callback`) throw new Error("redirect mismatch");
+      auth.requireOrigin(origin);
+    } catch { throw authError(400,"oauth_redirect_invalid","The sign-in redirect is not allowed"); }
+    const nonceCookie=cookieValue(req,OAUTH_NONCE_COOKIE);
+    if (!constantTimeEqual(parsed.nonce,nonceCookie??"")) throw authError(400,"oauth_state_mismatch","The sign-in response could not be verified");
+    if (typeof req.query.error==="string") {
+      res.setHeader("Set-Cookie",makeCookie(OAUTH_NONCE_COOKIE,"",{secure:new URL(origin).protocol==="https:",maxAge:0}));
+      const failed=new URL("/",origin); failed.searchParams.set("worldex_auth","failed");
+      return res.redirect(303,failed.toString());
+    }
+    const result=await auth.finishOAuth({code:req.query.code,state,nonceCookie,origin});
+    const secure=result.secure;
+    res.setHeader("Set-Cookie",[
+      makeCookie(SESSION_COOKIE,result.token,{secure,maxAge:auth.sessionMaxAgeSeconds}),
+      makeCookie(OAUTH_NONCE_COOKIE,"",{secure,maxAge:0}),
+    ]);
+    const success=new URL("/",origin); success.searchParams.set("worldex_auth","connected");
+    return res.redirect(303,success.toString());
   }));
   app.post("/api/auth/oauth/callback", run(async (req, res) => {
     if (!(await rate(req, res, "oauth-callback", 10, 600))) return;
@@ -97,6 +125,72 @@ export function createApp({ repo, auth, provider, env = process.env, logger = co
     const secure = new URL(current.session.origin).protocol === "https:";
     res.setHeader("Set-Cookie", makeCookie(SESSION_COOKIE, "", { secure, maxAge: 0 }));
     json(res, 200, { ok: true });
+  }));
+
+  app.get("/api/connections/providers", run(async (req,res) => {
+    await loadAuth(req,true);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    json(res,200,{providers:connections.listProviders()});
+  }));
+  app.get("/api/connections", run(async (req,res) => {
+    await loadAuth(req,true);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    const workspaceId=typeof req.query.workspaceId==="string"?req.query.workspaceId:"";
+    if (!workspaceId) throw new ValidationError("workspaceId is required");
+    if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    json(res,200,{connections:await repo.listProviderConnections(req.auth.user.id,workspaceId)});
+  }));
+  app.post("/api/connections/:provider/start", run(async (req,res) => {
+    await loadAuth(req,true); requireMutation(req);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    if (!(await rate(req,res,`connector-start:${req.auth.user.id}`,10,600))) return;
+    const workspaceId=typeof req.body?.workspaceId==="string"?req.body.workspaceId:"";
+    const scopes=req.body?.scopes;
+    if (!workspaceId) throw new ValidationError("workspaceId is required");
+    if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    const started=await connections.start({userId:req.auth.user.id,workspaceId,providerId:req.params.provider,requestedScopes:scopes,redirectOrigin:req.auth.session.origin});
+    json(res,200,started);
+  }));
+  app.get("/api/connections/oauth/callback/:provider", run(async (req,res) => {
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    const state=typeof req.query.state==="string"?req.query.state:"";
+    const transaction=await connections.getTransaction(state);
+    if (!transaction || transaction.provider!==req.params.provider) throw authError(400,"oauth_state_invalid","The authorization request expired or could not be verified");
+    const token=cookieValue(req,SESSION_COOKIE);
+    const callbackAuth=await auth.resolveSession(token,transaction.redirectOrigin,{safeRead:true});
+    if (!callbackAuth || callbackAuth.user.id!==transaction.userId) {
+      await connections.cancel(state);
+      const returnUrl=new URL("/",transaction.redirectOrigin);
+      returnUrl.searchParams.set("worldex_oauth","signin");
+      return res.redirect(303,returnUrl.toString());
+    }
+    const returnUrl=new URL("/",transaction.redirectOrigin);
+    returnUrl.searchParams.set("worldex_oauth","failed");
+    returnUrl.searchParams.set("provider",transaction.provider);
+    if (typeof req.query.error==="string") {
+      await connections.cancel(state);
+      returnUrl.searchParams.set("reason","denied");
+      return res.redirect(303,returnUrl.toString());
+    }
+    try {
+      await connections.complete({providerId:transaction.provider,state,code:req.query.code});
+      returnUrl.searchParams.set("worldex_oauth","connected");
+      returnUrl.searchParams.delete("reason");
+    } catch (error) {
+      logger.warn?.("Provider authorization did not complete",{provider:transaction.provider,code:error?.code??"oauth_failed"});
+      returnUrl.searchParams.set("reason","setup");
+    }
+    return res.redirect(303,returnUrl.toString());
+  }));
+  app.delete("/api/connections/:connectionId", run(async (req,res) => {
+    await loadAuth(req,true); requireMutation(req);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    const workspaceId=typeof req.body?.workspaceId==="string"?req.body.workspaceId:"";
+    if (!workspaceId) throw new ValidationError("workspaceId is required");
+    if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    const revocation=await connections.revokeConnection({userId:req.auth.user.id,workspaceId,connectionId:req.params.connectionId});
+    if (!(await repo.disconnectProviderConnection(req.auth.user.id,workspaceId,req.params.connectionId))) throw authError(404,"connection_not_found","Connection not found");
+    json(res,200,{ok:true,providerAccessRevoked:revocation.revoked,providerRevocationSupported:revocation.supported,localTokensDeleted:true});
   }));
 
   app.get("/api/state", run(async (req, res) => {

@@ -50,6 +50,16 @@ const connectionGroups = [
   { category: "Developer APIs", items: [{ name: "GitHub", note: "Repositories and releases", state: "Not yet supported" }] },
 ] as const;
 const connectionCategoryNames = connectionGroups.map((item) => item.category);
+const oauthProviderForConnector: Record<string, string> = {
+  "Google Drive": "google", Gmail: "google", "Google Analytics": "google", GitHub: "github", LinkedIn: "linkedin",
+};
+const requiredScopeForConnector: Partial<Record<string, ResourceScope>> = {
+  "Google Drive": "Content", Gmail: "Messages", "Google Analytics": "Analytics", LinkedIn: "Publishing",
+};
+const defaultScopesForConnector = (name: string): ResourceScope[] => {
+  const required = requiredScopeForConnector[name];
+  return required ? ["Profile", required] : ["Profile"];
+};
 const resourceScopes: ResourceScope[] = ["Profile", "Content", "Publishing", "Analytics", "Messages"];
 const timeNow = () => new Date().toISOString();
 
@@ -63,6 +73,11 @@ export default function App() {
   const [chatCreateRequest, setChatCreateRequest] = useState(false);
   const [saved, setSaved] = useState(true);
   const current = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) ?? null;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("worldex_oauth") || params.has("worldex_auth")) setPage("connections");
+  }, []);
 
   useEffect(() => {
     const ok = saveState(state);
@@ -197,7 +212,7 @@ export default function App() {
         {page === "chat" && <ChatView workspaceName={current.name} chats={current.chats} createSignal={chatCreateRequest} onCreateHandled={() => setChatCreateRequest(false)} onCreate={() => addChat(current.id)} onSaveDraft={(chatId, text) => saveChatDraft(current.id, chatId, text)} onRename={(chatId, title) => changeChat(current.id, chatId, (chat) => ({ ...chat, title, updatedAt: timeNow() }), "Conversation renamed")} onArchive={(chatId, archived) => changeChat(current.id, chatId, (chat) => ({ ...chat, archivedAt: archived ? timeNow() : undefined, updatedAt: timeNow() }), archived ? "Conversation archived" : "Conversation reopened")} />}
         {page === "workspaces" && <WorkspaceView current={current} workspaces={state.workspaces} policies={state.accessPolicies} onSwitch={switchWorkspace} onNew={() => setCreatingWorkspace(true)} onOpenSettings={() => setPage("settings")} />}
         {page === "opportunities" && <OpportunityFinder />}
-        {page === "connections" && <ConnectView activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
+        {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
         {page === "settings" && <SettingsView workspace={current} state={state} updateWorkspace={updateWorkspace} setOverview={(value) => setState((previous) => ({ ...previous, crossWorkspaceOverview: value }))} onReset={() => { if (window.confirm("Delete the locally saved WORLDEX data in this browser? This cannot be undone.")) { localStorage.removeItem("worldex.mvp.state.v1"); setState(blankState()); } }} />}
         {page === "status" && <StatusView />}
         {page === "dropship" && <DropshipView />}
@@ -259,24 +274,175 @@ function targetIds(policy: AccessPolicy, workspaces: Workspace[]) {
   return policy.shareWithAll ? workspaces.map((workspace) => workspace.id).filter((id) => id !== policy.ownerWorkspaceId) : policy.targetWorkspaceIds;
 }
 
-function ConnectView({ activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke }: { activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void }) {
+function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke }: { appState: AppState; activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All categories");
   const [showForm, setShowForm] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
+  const [selectedConnector, setSelectedConnector] = useState<{ name: string; note: string; state: string; category: string } | null>(null);
+  const [selectedScopes, setSelectedScopes] = useState<ResourceScope[]>(["Profile"]);
+  const [providers, setProviders] = useState<{ id: string; name: string; configured: boolean; supportedScopes: string[] }[]>([]);
+  const [providerConnections, setProviderConnections] = useState<{ id: string; provider: string; accountLabel: string; status: string; scopeCategories: string[] }[]>([]);
+  const [csrfToken, setCsrfToken] = useState("");
+  const [authState, setAuthState] = useState<"checking" | "signed-in" | "signed-out">("checking");
+  const [serverWorkspaceReady, setServerWorkspaceReady] = useState(false);
+  const [loadingConnections, setLoadingConnections] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [apiMessage, setApiMessage] = useState("");
+  const [callbackMessage, setCallbackMessage] = useState("");
+  const [connectionNotice, setConnectionNotice] = useState("");
+  const [selectedConnection, setSelectedConnection] = useState<{ id: string; provider: string; accountLabel: string; scopeCategories: string[] } | null>(null);
+
+  const loadConnections = async () => {
+    const meResponse = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (meResponse.status === 401) { setAuthState("signed-out"); setServerWorkspaceReady(false); return; }
+    if (!meResponse.ok) throw new Error("WORLDEX sign-in status could not be checked");
+    const me = await meResponse.json();
+    if (!me.authenticated) { setAuthState("signed-out"); setServerWorkspaceReady(false); return; }
+    setAuthState("signed-in");
+    setCsrfToken(me.csrfToken ?? "");
+    const [providerResponse, stateResponse] = await Promise.all([
+      fetch("/api/connections/providers", { credentials: "same-origin" }),
+      fetch("/api/state", { credentials: "same-origin" }),
+    ]);
+    if (!providerResponse.ok || !stateResponse.ok) throw new Error("The WORLDEX server could not load connector settings");
+    const providerData = await providerResponse.json();
+    const serverState = await stateResponse.json();
+    setProviders(providerData.providers ?? []);
+    const workspaceReady = (serverState.workspaces ?? []).some((workspace: Workspace) => workspace.id === activeWorkspace.id);
+    setServerWorkspaceReady(workspaceReady);
+    if (workspaceReady) {
+      const connectionResponse = await fetch(`/api/connections?workspaceId=${encodeURIComponent(activeWorkspace.id)}`, { credentials: "same-origin" });
+      if (!connectionResponse.ok) throw new Error("Connections for this workspace could not be loaded");
+      const connectionData = await connectionResponse.json();
+      setProviderConnections(connectionData.connections ?? []);
+    } else setProviderConnections([]);
+  };
+
+  useEffect(() => {
+    let active = true;
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get("worldex_oauth");
+    const authStatus = params.get("worldex_auth");
+    if (oauthStatus === "connected") setCallbackMessage("Provider account connected successfully.");
+    else if (oauthStatus === "signin") setCallbackMessage("Your WORLDEX sign-in session was not available when the provider returned. Sign in and try again.");
+    else if (oauthStatus === "failed") setCallbackMessage(params.get("reason") === "denied" ? "The provider authorization was cancelled." : "The provider could not complete authorization. Check its setup and try again.");
+    else if (authStatus === "connected") setCallbackMessage("You are signed in to WORLDEX. Save your local workspace to your account to enable connections.");
+    else if (authStatus === "failed") setCallbackMessage("WORLDEX sign-in was cancelled or could not be completed.");
+    if (oauthStatus || authStatus) window.history.replaceState({}, document.title, window.location.pathname);
+    const run = async () => {
+      try { await loadConnections(); }
+      catch (error) { if (active) setApiMessage(error instanceof Error ? error.message : "Could not load connection settings"); }
+      finally { if (active) setLoadingConnections(false); }
+    };
+    void run();
+    return () => { active = false; };
+  }, [activeWorkspace.id]);
+
+  const signIn = async () => {
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch("/api/auth/oauth/start", { method: "POST", credentials: "same-origin" });
+      const data = await response.json();
+      if (!response.ok || !data.authorizationUrl) throw new Error(data.error?.message ?? "WORLDEX sign-in is not configured yet");
+      window.location.assign(data.authorizationUrl);
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not start WORLDEX sign-in"); setBusy(false); }
+  };
+
+  const syncWorkspace = async () => {
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch("/api/state", {
+        method: "PUT", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify(appState),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message ?? "Workspace could not be saved to your account");
+      await loadConnections();
+      setConnectionNotice("Workspace saved securely to your WORLDEX account. You can now connect providers.");
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Workspace sync failed"); }
+    finally { setBusy(false); }
+  };
+
+  const startProviderConnection = async () => {
+    if (!selectedConnector) return;
+    const providerId = oauthProviderForConnector[selectedConnector.name];
+    if (!providerId) { setApiMessage("This platform's official connector is not implemented yet."); return; }
+    const providerInfo = providers.find((item) => item.id === providerId);
+    if (!providerInfo?.configured) { setApiMessage("This integration is not enabled by WORLDEX yet."); return; }
+    const scopes = selectedScopes.filter((scope) => providerInfo.supportedScopes.includes(scope));
+    if (!scopes.includes("Profile")) { setApiMessage("Profile permission is required to identify the connected account."); return; }
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch(`/api/connections/${providerId}/start`, {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify({ workspaceId: activeWorkspace.id, scopes }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.authorizationUrl) throw new Error(data.error?.message ?? "Could not start provider authorization");
+      window.location.assign(data.authorizationUrl);
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not start provider authorization"); setBusy(false); }
+  };
+
+  const disconnectProvider = async (connectionId: string) => {
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: "DELETE", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify({ workspaceId: activeWorkspace.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message ?? "Could not disconnect this account");
+      await loadConnections();
+      setSelectedConnection(null);
+      setConnectionNotice(data.providerAccessRevoked
+        ? "WORLDEX disconnected this account and confirmed that the provider revoked its authorization."
+        : data.providerRevocationSupported
+          ? "WORLDEX deleted its local tokens, but the provider did not confirm revocation. Review the provider's connected-app settings."
+          : "WORLDEX deleted its local tokens. This provider does not expose a supported revocation endpoint here, so remove WORLDEX from its connected-app settings as well.");
+      setSelectedConnector(null);
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not disconnect account"); }
+    finally { setBusy(false); }
+  };
+
+  const providerFor = (name: string) => providers.find((provider) => provider.id === oauthProviderForConnector[name]);
+  const connectedFor = (name: string) => providerConnections.find((connection) => connection.provider === oauthProviderForConnector[name] && connection.status === "connected");
+  const openConnector = (connector: { name: string; note: string; state: string; category: string }) => {
+    const connection = connectedFor(connector.name) ?? null;
+    setSelectedConnector(connector);
+    setSelectedConnection(connection);
+    const existingScopes = (connection?.scopeCategories ?? []).filter((scope): scope is ResourceScope => resourceScopes.includes(scope as ResourceScope));
+    setSelectedScopes([...new Set<ResourceScope>([...defaultScopesForConnector(connector.name), ...existingScopes])]);
+    setApiMessage("");
+  };
   const matching = connectionGroups.flatMap((group) => group.items.map((item) => ({ ...item, category: group.category })))
     .filter((item) => (filter === "All categories" || item.category === filter) && `${item.name} ${item.category} ${item.note}`.toLowerCase().includes(query.toLowerCase()));
   const visiblePolicies = policies.filter((policy) => !policy.revokedAt && (policy.ownerWorkspaceId === activeWorkspace.id || targetIds(policy, workspaces).includes(activeWorkspace.id)));
   const ownerName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? "Unknown workspace";
   const policy = policies.find((item) => item.id === revokeId);
-  return <div className="standard-page connect-page"><div className="module-page-heading"><div><div className="eyebrow">ONE POLICY LAYER · NO ACCOUNT TOKENS</div><h1>Universal Connect</h1><p>Review integration readiness and keep workspace boundaries explicit.</p></div><div className="not-connected-chip"><span className="status-dot status-dot-amber" /> NO VERIFIED CONNECTIONS</div></div>
-    <div className="connect-boundary"><span><LockKeyhole size={16} /></span><div><b>Provider accounts are not connected in this MVP.</b><p>Catalog entries describe planned integration points only. OAuth, token storage, live account selection, sync, disconnect and external permission enforcement all require real server-side setup.</p></div></div>
-    <div className="catalog-header"><div><h2>Connector catalogue</h2><p>{connectionGroups.length} categories · each account is <b>Not connected</b></p></div><div className="catalog-controls"><label className="search-field"><Search size={14} /><input aria-label="Search connectors" placeholder="Search integrations" value={query} onChange={(e) => setQuery(e.target.value)} />{query && <button aria-label="Clear search" onClick={() => setQuery("")}><X size={13} /></button>}</label><label className="select-filter"><SlidersHorizontal size={14} /><select aria-label="Filter connector category" value={filter} onChange={(e) => setFilter(e.target.value)}><option>All categories</option>{connectionCategoryNames.map((category) => <option key={category}>{category}</option>)}</select><ChevronDown size={13} /></label></div></div>
-    <div className="connector-table"><div className="connector-table-head"><span>PLATFORM</span><span>CATEGORY</span><span>CAPABILITY</span><span>CONNECTION STATUS</span></div>{matching.length ? matching.map((connector) => <div key={`${connector.category}-${connector.name}`} className="connector-row"><span className="connector-name"><span className="connector-icon"><Store size={15} /></span><span><b>{connector.name}</b><small>Workspace: {activeWorkspace.name}</small></span></span><span className="connector-category">{connector.category}</span><span className="connector-note">{connector.note}</span><span className="connector-status"><span className="status-dot status-dot-muted" />Not connected · {connector.state}<button disabled title="A genuine OAuth connection and server-side setup are not configured">Setup unavailable</button></span></div>) : <div className="catalog-empty"><Search size={17} /><b>No connectors match</b><small>Try another category or search.</small></div>}</div>
+  return <div className="standard-page connect-page"><div className="module-page-heading"><div><div className="eyebrow">ONE POLICY LAYER · NO ACCOUNT TOKENS</div><h1>Universal Connect</h1><p>Review integration readiness and keep workspace boundaries explicit.</p></div><div className="not-connected-chip"><span className="status-dot status-dot-amber" /> {loadingConnections ? "CHECKING CONNECTIONS" : `${providerConnections.filter((item) => item.status === "connected").length} CONNECTED ACCOUNTS`}</div></div>
+    <div className="connect-boundary"><span><LockKeyhole size={16} /></span><div><b>Connect accounts without asking users for API keys.</b><p>WORLDEX will send users to each provider’s official authorization page. AURIX will only receive the permissions the user approves, and important actions such as publishing or sending messages will require confirmation. Provider authorization is not live until WORLDEX completes that provider’s server-side registration.</p></div></div>
+    <div className="connector-session-panel">
+      <div className="connector-session-copy"><b>{authState === "checking" ? "Checking WORLDEX account…" : authState === "signed-in" ? "WORLDEX account session active" : "Sign in to connect your accounts"}</b><p>{authState === "signed-in" ? serverWorkspaceReady ? "This workspace is saved in your secure account. Provider tokens will be stored on the server." : "Your current workspace is still browser-local. Save it to your WORLDEX account before connecting a provider." : "Provider connections belong to your account, not just this browser. Sign in first; no provider password or API key is entered here."}</p></div>
+      {authState === "signed-out" && <button className="primary-button" disabled={busy || loadingConnections} onClick={signIn}>Sign in with WORLDEX <ArrowRight size={13} /></button>}
+      {authState === "signed-in" && !serverWorkspaceReady && <button className="primary-button" disabled={busy || loadingConnections} onClick={syncWorkspace}>{busy ? "Saving…" : "Save workspace to account"} <ArrowRight size={13} /></button>}
+      {authState === "signed-in" && serverWorkspaceReady && <span className="connector-session-ready"><CheckCircle2 size={14} /> Workspace saved</span>}
+      {authState === "checking" && <span className="connector-session-ready">Checking…</span>}
+    </div>
+    {callbackMessage && <div className="connector-notice"><CheckCircle2 size={14} />{callbackMessage}<button onClick={() => setCallbackMessage("")} aria-label="Dismiss"><X size={13} /></button></div>}
+    {connectionNotice && <div className="connector-notice"><CheckCircle2 size={14} />{connectionNotice}<button onClick={() => setConnectionNotice("")} aria-label="Dismiss"><X size={13} /></button></div>}
+    {apiMessage && <div className="connector-error"><AlertCircle size={14} />{apiMessage}<button onClick={() => setApiMessage("")} aria-label="Dismiss"><X size={13} /></button></div>}
+    <div className="catalog-header"><div><h2>Integration marketplace</h2><p>{matching.length} integrations shown · <b>Not connected</b> until official authorization is configured</p></div><div className="catalog-controls"><label className="search-field"><Search size={14} /><input aria-label="Search connectors" placeholder="Search integrations" value={query} onChange={(e) => setQuery(e.target.value)} />{query && <button aria-label="Clear search" onClick={() => setQuery("")}><X size={13} /></button>}</label><label className="select-filter"><SlidersHorizontal size={14} /><select aria-label="Filter connector category" value={filter} onChange={(e) => setFilter(e.target.value)}><option>All categories</option>{connectionCategoryNames.map((category) => <option key={category}>{category}</option>)}</select><ChevronDown size={13} /></label></div></div>
+    <div className="integration-grid">{matching.length ? matching.map((connector) => { const providerInfo=providerFor(connector.name); const connection=connectedFor(connector.name); const required=requiredScopeForConnector[connector.name]; const hasPermission=!required || Boolean(connection?.scopeCategories.includes(required)); const mapped=Boolean(oauthProviderForConnector[connector.name]); const status=connection && hasPermission ? "Connected" : connection ? "Permission needed" : providerInfo?.configured ? "Ready to connect" : mapped ? "WORLDEX setup required" : "Coming later"; return <article key={`${connector.category}-${connector.name}`} className="integration-card"><div className="integration-card-top"><span className="integration-icon"><Store size={17} /></span><span className={`integration-status ${connection && hasPermission ? "is-connected" : ""}`}><i />{status}</span></div><div className="integration-card-copy"><h3>{connector.name}</h3><span className="integration-category">{connector.category}</span><p>{connector.note}</p>{connection && <small className="integration-account-label">{connection.accountLabel}</small>}</div><div className="integration-card-footer"><small>{providerInfo?.configured ? "Official OAuth" : mapped ? "Developer setup needed" : "Not implemented"}</small><button className="integration-connect-button" onClick={() => openConnector(connector)}>{connection ? "Manage" : mapped ? "Connect" : "Details"} <ArrowRight size={13} /></button></div></article>; }) : <div className="catalog-empty"><Search size={17} /><b>No integrations match</b><small>Try another category or search.</small></div>}</div>
     <div className="policy-section"><div className="policy-heading"><div><div className="eyebrow">WORKSPACE-LEVEL ACCESS RULES</div><h2>Sharing policy drafts</h2><p>Local policy records only—no external API permission is granted or enforced.</p></div><button className="secondary-button" onClick={() => setShowForm((open) => !open)}><Plus size={14} /> {showForm ? "Close form" : "Draft a policy"}</button></div>
       {showForm && <PolicyForm activeWorkspace={activeWorkspace} workspaces={workspaces} onCancel={() => setShowForm(false)} onCreate={(created) => { onCreatePolicy(created); setShowForm(false); }} />}
       {!visiblePolicies.length && !showForm ? <div className="policy-empty"><div className="empty-orbit"><Shield size={15} /></div><span><b>No active policy drafts here</b><small>When you draft one, its proposed scopes and workspace targets will be visible here. No accounts are connected.</small></span></div> : visiblePolicies.length > 0 && <div className="policy-list">{visiblePolicies.map((item) => <div key={item.id} className="policy-row"><div className="policy-account"><span className="policy-app-icon"><Link2 size={14} /></span><span><b>{item.accountLabel}</b><small>{item.provider} · owned by {ownerName(item.ownerWorkspaceId)}</small></span></div><div className="policy-scopes"><span className="eyebrow">PROPOSED SCOPES</span><div>{item.scopes.map((scope) => <span key={scope}>{scope}</span>)}</div></div><div className="policy-targets"><span className="eyebrow">TARGET WORKSPACES</span><small>{item.shareWithAll ? `All workspaces (current & future)` : targetIds(item, workspaces).map(ownerName).join(", ") || "None"}</small></div><div className="policy-status"><span className="state-chip state-limited">DRAFT · NO ACCESS</span>{item.ownerWorkspaceId === activeWorkspace.id ? <button className="text-link revoke-link" onClick={() => setRevokeId(item.id)}>Revoke <X size={12} /></button> : <small>Revoke from owner workspace</small>}</div></div>)}</div>}
     </div>
+    {selectedConnector && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setSelectedConnector(null); }}><section className="confirm-modal integration-modal" role="dialog" aria-modal="true" aria-labelledby="integration-modal-title"><div className="modal-icon"><Link2 size={18} /></div><div className="eyebrow">OFFICIAL ACCOUNT AUTHORIZATION</div><h2 id="integration-modal-title">{selectedConnection ? `Manage ${selectedConnector.name}` : `Connect ${selectedConnector.name}`}</h2><p>{selectedConnector.note}. WORLDEX sends you to the provider’s official sign-in and approval page. Never enter your provider password or an API key into WORLDEX.</p>{selectedConnection && <div className="integration-connected-account"><span className="integration-status is-connected"><i />CONNECTED</span><b>{selectedConnection.accountLabel}</b><small>Granted groups: {selectedConnection.scopeCategories.join(", ")}</small></div>}<div className="integration-permission-panel"><b>Choose the permissions this workspace needs</b>{(providerFor(selectedConnector.name)?.supportedScopes ?? []).map((scope) => <label key={scope} className="integration-scope-option"><input type="checkbox" checked={selectedScopes.includes(scope as ResourceScope)} disabled={scope === "Profile" || busy} onChange={() => setSelectedScopes((previous) => previous.includes(scope as ResourceScope) ? previous.filter((item) => item !== scope) : [...previous, scope as ResourceScope])} /><span><b>{scope}</b><small>{scope === "Profile" ? "Identify the account connected to this workspace" : scope === "Content" ? "Read permitted files and content" : scope === "Publishing" ? "Request publishing permission where the provider approves it" : scope === "Analytics" ? "Read analytics reports" : "Read permitted mailbox data"}</small></span>{scope === "Profile" && <em>Required</em>}</label>)}{!providerFor(selectedConnector.name)?.supportedScopes.length && <span className="integration-scope-unavailable">Permission options are not available for this connector yet.</span>}</div><div className="integration-setup-note"><AlertCircle size={14} /><span>{!oauthProviderForConnector[selectedConnector.name] ? "This platform’s OAuth adapter is not implemented yet." : !providerFor(selectedConnector.name)?.configured ? "WORLDEX has not registered and configured this provider yet. Its server-side client credentials and encryption key must be installed before users can connect." : authState !== "signed-in" ? "Sign in to WORLDEX before starting this provider authorization." : !serverWorkspaceReady ? "Save this workspace to your WORLDEX account before connecting a provider." : "The provider will show its official permission screen. Access is limited to the scopes you select and approve."}</span></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setSelectedConnector(null)}>Close</button>{selectedConnection && <button className="danger-button" disabled={busy} onClick={() => disconnectProvider(selectedConnection.id)}>{busy ? "Working…" : "Disconnect"}</button>}<button className="primary-button" disabled={busy || authState !== "signed-in" || !serverWorkspaceReady || !providerFor(selectedConnector.name)?.configured || !(providerFor(selectedConnector.name)?.supportedScopes.length)} onClick={startProviderConnection}>{busy ? "Opening provider…" : selectedConnection ? "Update permissions" : `Continue to ${providerFor(selectedConnector.name)?.name ?? "provider"}`} <ArrowRight size={13} /></button></div></section></div>
+    }
     {revokeId && policy && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="revoke-title"><div className="modal-icon warning"><AlertCircle size={18} /></div><div className="eyebrow">REVOKE SHARING POLICY</div><h2 id="revoke-title">Remove this local policy draft?</h2><p><b>{policy.accountLabel}</b> will no longer be referenced as shared with any workspace. This does not revoke an external API token because none exists.</p><div className="modal-actions"><button className="secondary-button" onClick={() => setRevokeId(null)}>Keep policy</button><button className="danger-button" onClick={() => { onRevoke(policy.id); setRevokeId(null); }}>Revoke policy</button></div></section></div>}
   </div>;
 }

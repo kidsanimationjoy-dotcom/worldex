@@ -52,6 +52,80 @@ export function createMysqlRepository(pool) {
       const [result] = await pool.execute("UPDATE app_sessions SET revoked_at=UTC_TIMESTAMP(3) WHERE token_hash=? AND user_id=? AND revoked_at IS NULL", [tokenHash, userId]);
       return result.affectedRows > 0;
     },
+    async createOAuthTransaction(transaction) {
+      await pool.execute("DELETE FROM oauth_transactions WHERE expires_at<=UTC_TIMESTAMP(3)");
+      await pool.execute(
+        "INSERT INTO oauth_transactions (state_hash,user_id,workspace_id,provider,redirect_origin,redirect_uri,scopes,verifier_ciphertext,expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        [transaction.stateHash,transaction.userId,transaction.workspaceId,transaction.provider,transaction.redirectOrigin,transaction.redirectUri,JSON.stringify(transaction.scopes),transaction.verifierCiphertext,sqlDate(transaction.expiresAt)],
+      );
+    },
+    async getOAuthTransaction(stateHash) {
+      const [rows] = await pool.execute("SELECT state_hash,user_id,workspace_id,provider,redirect_origin,redirect_uri,scopes,verifier_ciphertext,expires_at FROM oauth_transactions WHERE state_hash=? AND expires_at>UTC_TIMESTAMP(3) LIMIT 1", [stateHash]);
+      const row=rows[0];
+      return row ? {
+        stateHash:row.state_hash,userId:row.user_id,workspaceId:row.workspace_id,provider:row.provider,
+        redirectOrigin:row.redirect_origin,redirectUri:row.redirect_uri,scopes:json(row.scopes,[]),
+        verifierCiphertext:row.verifier_ciphertext,expiresAt:iso(row.expires_at),
+      } : null;
+    },
+    async deleteOAuthTransaction(stateHash) {
+      const [result]=await pool.execute("DELETE FROM oauth_transactions WHERE state_hash=?", [stateHash]);
+      return result.affectedRows>0;
+    },
+    async saveProviderConnection(connection) {
+      await pool.execute(
+        `INSERT INTO provider_connections
+          (id,user_id,workspace_id,provider,provider_account_id,account_label,scope_categories,provider_scopes,access_token_ciphertext,refresh_token_ciphertext,token_type,expires_at,status,connected_at,disconnected_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'connected',UTC_TIMESTAMP(3),NULL)
+         ON DUPLICATE KEY UPDATE account_label=VALUES(account_label),scope_categories=VALUES(scope_categories),provider_scopes=VALUES(provider_scopes),
+          access_token_ciphertext=VALUES(access_token_ciphertext),refresh_token_ciphertext=COALESCE(VALUES(refresh_token_ciphertext),refresh_token_ciphertext),
+          token_type=VALUES(token_type),expires_at=VALUES(expires_at),status='connected',updated_at=UTC_TIMESTAMP(3),disconnected_at=NULL`,
+        [connection.id,connection.userId,connection.workspaceId,connection.provider,connection.providerAccountId,connection.accountLabel,JSON.stringify(connection.scopeCategories),JSON.stringify(connection.providerScopes),connection.accessTokenCiphertext,connection.refreshTokenCiphertext,connection.tokenType,connection.expiresAt?sqlDate(connection.expiresAt):null],
+      );
+      const [rows]=await pool.execute(
+        "SELECT id,provider,provider_account_id,account_label,scope_categories,provider_scopes,status,expires_at,connected_at,updated_at FROM provider_connections WHERE user_id=? AND workspace_id=? AND provider=? AND provider_account_id=? LIMIT 1",
+        [connection.userId,connection.workspaceId,connection.provider,connection.providerAccountId],
+      );
+      return mapProviderConnection(rows[0]);
+    },
+    async getProviderConnectionSecrets(userId, workspaceId, connectionId) {
+      const [rows]=await pool.execute(
+        "SELECT id,provider,scope_categories,access_token_ciphertext,refresh_token_ciphertext,expires_at,status FROM provider_connections WHERE id=? AND user_id=? AND workspace_id=? LIMIT 1",
+        [connectionId,userId,workspaceId],
+      );
+      const row=rows[0];
+      return row?{
+        id:row.id,provider:row.provider,scopeCategories:json(row.scope_categories,[]),
+        accessTokenCiphertext:row.access_token_ciphertext,refreshTokenCiphertext:row.refresh_token_ciphertext,
+        expiresAt:row.expires_at?iso(row.expires_at):null,status:row.status,
+      }:null;
+    },
+    async listProviderConnections(userId, workspaceId) {
+      const [rows]=await pool.execute(
+        "SELECT id,provider,provider_account_id,account_label,scope_categories,provider_scopes,status,expires_at,connected_at,updated_at FROM provider_connections WHERE user_id=? AND workspace_id=? ORDER BY connected_at DESC",
+        [userId,workspaceId],
+      );
+      return rows.map(mapProviderConnection);
+    },
+    async updateProviderConnectionTokens(update) {
+      await pool.execute(
+        "UPDATE provider_connections SET access_token_ciphertext=?,refresh_token_ciphertext=?,provider_scopes=?,token_type=?,expires_at=?,updated_at=UTC_TIMESTAMP(3) WHERE id=? AND user_id=? AND workspace_id=? AND status='connected'",
+        [update.accessTokenCiphertext,update.refreshTokenCiphertext,JSON.stringify(update.providerScopes),update.tokenType,update.expiresAt?sqlDate(update.expiresAt):null,update.id,update.userId,update.workspaceId],
+      );
+    },
+    async disconnectProviderConnection(userId, workspaceId, connectionId) {
+      const connection=await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [rows]=await connection.execute("SELECT id,provider FROM provider_connections WHERE id=? AND user_id=? AND workspace_id=? AND status='connected' FOR UPDATE", [connectionId,userId,workspaceId]);
+        if (!rows.length) { await connection.commit(); return false; }
+        await connection.execute("UPDATE provider_connections SET status='disconnected',access_token_ciphertext=NULL,refresh_token_ciphertext=NULL,disconnected_at=UTC_TIMESTAMP(3),updated_at=UTC_TIMESTAMP(3) WHERE id=? AND user_id=? AND workspace_id=?", [connectionId,userId,workspaceId]);
+        await connection.execute("INSERT INTO audit_events (user_id,workspace_id,entity_type,entity_id,action,detail,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(3))", [userId,workspaceId,"provider_connection",connectionId,"disconnected",JSON.stringify({provider:rows[0].provider,localTokensDeleted:true})]);
+        await connection.commit();
+        return true;
+      } catch(error) { await connection.rollback(); throw error; }
+      finally { connection.release(); }
+    },
     async loadState(userId) {
       const [userRows] = await pool.execute("SELECT cross_workspace_overview,active_workspace_id FROM users WHERE id=?", [userId]);
       if (!userRows.length) throw forbidden("Account not found");
@@ -247,6 +321,14 @@ export function createMysqlRepository(pool) {
   };
 }
 
+function mapProviderConnection(row) {
+  if (!row) return null;
+  return {
+    id:row.id,provider:row.provider,providerAccountId:row.provider_account_id,accountLabel:row.account_label,
+    scopeCategories:json(row.scope_categories,[]),providerScopes:json(row.provider_scopes,[]),status:row.status,
+    expiresAt:row.expires_at?iso(row.expires_at):null,connectedAt:iso(row.connected_at),updatedAt:iso(row.updated_at),
+  };
+}
 function group(rows, key) { const map = new Map(); for (const row of rows) { const list = map.get(row[key]) ?? []; list.push(row); map.set(row[key], list); } return map; }
 async function assertNoForeign(connection, table, ids, userId, workspaceId, message) {
   if (!ids.length) return;
