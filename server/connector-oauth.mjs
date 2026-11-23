@@ -207,6 +207,46 @@ export function createConnectorOAuthService({ repo, env = process.env, fetchImpl
     return connection;
   }
 
+  async function revokeConnection({ userId, workspaceId, connectionId }) {
+    const saved=await repo.getProviderConnectionSecrets(userId,workspaceId,connectionId);
+    if (!saved || saved.status!=="connected") return { revoked:false, supported:false };
+    const config=configs[saved.provider];
+    if (!config?.configured || !saved.accessTokenCiphertext) return { revoked:false, supported:false };
+    try {
+      const accessToken=decryptSecret(saved.accessTokenCiphertext,key);
+      const refreshToken=saved.refreshTokenCiphertext?decryptSecret(saved.refreshTokenCiphertext,key):null;
+      if (saved.provider==="google") {
+        const token=refreshToken||accessToken;
+        const response=await fetchImpl("https://oauth2.googleapis.com/revoke",{
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded","Accept":"application/json"},
+          body:new URLSearchParams({token}),
+          signal:AbortSignal.timeout(10000),
+        });
+        return {revoked:response.ok,supported:true};
+      }
+      if (saved.provider==="github") {
+        const basic=Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64");
+        const response=await fetchImpl(`https://api.github.com/applications/${encodeURIComponent(config.clientId)}/grant`,{
+          method:"DELETE",
+          headers:{
+            "Accept":"application/vnd.github+json",
+            "Authorization":`Basic ${basic}`,
+            "Content-Type":"application/json",
+            "X-GitHub-Api-Version":"2026-03-10",
+          },
+          body:JSON.stringify({access_token:accessToken}),
+          signal:AbortSignal.timeout(10000),
+        });
+        return {revoked:response.status===204,supported:true};
+      }
+      // The standard LinkedIn member OAuth flow does not document a public revocation endpoint.
+      return {revoked:false,supported:false};
+    } catch {
+      return {revoked:false,supported:saved.provider==="google"||saved.provider==="github"};
+    }
+  }
+
   async function getAccessToken({ userId, workspaceId, connectionId, requiredScope }) {
     const saved = await repo.getProviderConnectionSecrets(userId,workspaceId,connectionId);
     if (!saved || saved.status !== "connected" || !saved.accessTokenCiphertext) throw fail(404,"connection_not_found","Connected account was not found");
@@ -242,5 +282,5 @@ export function createConnectorOAuthService({ repo, env = process.env, fetchImpl
     return { provider:current.provider, accessToken:decryptSecret(current.accessTokenCiphertext,key), scopeCategories:current.scopeCategories };
   }
 
-  return { listProviders, start, getTransaction, cancel, complete, getAccessToken, isEncryptionConfigured: Boolean(key) };
+  return { listProviders, start, getTransaction, cancel, complete, getAccessToken, revokeConnection, isEncryptionConfigured: Boolean(key) };
 }
