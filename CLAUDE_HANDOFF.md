@@ -52,7 +52,7 @@ The server deliberately does not auto-apply migrations to the shared database. R
 
 ## What is still not production-complete
 
-- The main UI now checks the authenticated session at startup, restores a signed-in user's server workspace state, and automatically writes later workspace changes to `/api/state` with the session CSRF token. The first transfer from a browser-local profile remains an explicit **Save workspace to account** action; it is never silently imported. In account mode the server is authoritative and account data is not copied into browser local storage. Signed-out preview mode remains browser-local.
+- The main UI now checks the authenticated session at startup, restores a signed-in user's server workspace state, and automatically writes later workspace changes to `/api/state` with the session CSRF token. The first transfer from a browser-local profile remains an explicit **Save workspace to account** action; it is never silently imported. In account mode the server is authoritative and account data is not copied into browser local storage. Signed-out preview mode remains browser-local. If the account session expires during autosave, the app clears the stale CSRF token and restores only the pre-existing local preview profile; it does not persist the in-memory account data to local storage.
 - Provider credentials, domain callback allowlists, migration 0002 and real provider application approvals are not configured.
 - Real provider consent/token exchanges have not been tested against live Google, GitHub or LinkedIn apps.
 - No provider API action (publishing, messaging, ads, store management, etc.) should be represented as implemented merely because OAuth works.

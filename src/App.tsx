@@ -181,10 +181,15 @@ export default function App() {
           });
           if (response.status === 401) {
             if (active) {
+              // Never persist previously server-loaded account data into the local preview
+              // when the session expires. Return to the pre-existing device-local profile.
               setAccountAuth("signed-out");
+              setAccountCsrfToken("");
               setAccountWorkspaceReady(false);
+              setAccountSyncStatus("local");
+              setState(loadState());
             }
-            throw new Error("Your WORLDEX session expired. Sign in again to continue account sync.");
+            return;
           }
           const data = await response.json();
           if (!response.ok) throw new Error(data.error?.message ?? "Account sync failed");
