@@ -80,6 +80,15 @@ export default function App() {
   const [saved, setSaved] = useState(true);
   const current = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) ?? null;
 
+  const handleAccountLogout = () => {
+    setAccountAuth("signed-out");
+    setAccountCsrfToken("");
+    setAccountWorkspaceReady(false);
+    setAccountSyncStatus("local");
+    setState(loadState());
+    setPage("home");
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has("worldex_oauth") || params.has("worldex_auth")) setPage("connections");
@@ -324,7 +333,7 @@ export default function App() {
         {page === "chat" && <ChatView workspaceName={current.name} chats={current.chats} createSignal={chatCreateRequest} onCreateHandled={() => setChatCreateRequest(false)} onCreate={() => addChat(current.id)} onSaveDraft={(chatId, text) => saveChatDraft(current.id, chatId, text)} onRename={(chatId, title) => changeChat(current.id, chatId, (chat) => ({ ...chat, title, updatedAt: timeNow() }), "Conversation renamed")} onArchive={(chatId, archived) => changeChat(current.id, chatId, (chat) => ({ ...chat, archivedAt: archived ? timeNow() : undefined, updatedAt: timeNow() }), archived ? "Conversation archived" : "Conversation reopened")} />}
         {page === "workspaces" && <WorkspaceView current={current} workspaces={state.workspaces} policies={state.accessPolicies} onSwitch={switchWorkspace} onNew={() => setCreatingWorkspace(true)} onOpenSettings={() => setPage("settings")} />}
         {page === "opportunities" && <OpportunityFinder />}
-        {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onServerWorkspaceReady={() => { setAccountWorkspaceReady(true); setAccountSyncStatus("saved"); }} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
+        {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onServerWorkspaceReady={() => { setAccountWorkspaceReady(true); setAccountSyncStatus("saved"); }} onAccountLogout={handleAccountLogout} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
         {page === "settings" && <SettingsView workspace={current} state={state} updateWorkspace={updateWorkspace} setOverview={(value) => setState((previous) => ({ ...previous, crossWorkspaceOverview: value }))} onReset={() => { void (async () => {
           const accountMode = accountWorkspaceReady;
           const prompt = accountMode
@@ -413,7 +422,7 @@ function targetIds(policy: AccessPolicy, workspaces: Workspace[]) {
   return policy.shareWithAll ? workspaces.map((workspace) => workspace.id).filter((id) => id !== policy.ownerWorkspaceId) : policy.targetWorkspaceIds;
 }
 
-function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke, onServerWorkspaceReady }: { appState: AppState; activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void; onServerWorkspaceReady: () => void }) {
+function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke, onServerWorkspaceReady, onAccountLogout }: { appState: AppState; activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void; onServerWorkspaceReady: () => void; onAccountLogout: () => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All categories");
   const [showForm, setShowForm] = useState(false);
@@ -486,6 +495,29 @@ function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreate
       if (!response.ok || !data.authorizationUrl) throw new Error(data.error?.message ?? "WORLDEX sign-in is not configured yet");
       window.location.assign(data.authorizationUrl);
     } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not start WORLDEX sign-in"); setBusy(false); }
+  };
+
+  const signOut = async () => {
+    setBusy(true);
+    setApiMessage("");
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrfToken },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message ?? "Could not sign out of WORLDEX");
+      setAuthState("signed-out");
+      setServerWorkspaceReady(false);
+      setProviderConnections([]);
+      setConnectionNotice("Signed out. Your account data remains on the server and was not copied into this browser.");
+      onAccountLogout();
+    } catch (error) {
+      setApiMessage(error instanceof Error ? error.message : "Could not sign out of WORLDEX");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const syncWorkspace = async () => {
@@ -570,6 +602,7 @@ function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreate
       {authState === "signed-out" && <button className="primary-button" disabled={busy || loadingConnections} onClick={signIn}>Sign in with WORLDEX <ArrowRight size={13} /></button>}
       {authState === "signed-in" && !serverWorkspaceReady && <button className="primary-button" disabled={busy || loadingConnections} onClick={syncWorkspace}>{busy ? "Saving…" : "Save workspace to account"} <ArrowRight size={13} /></button>}
       {authState === "signed-in" && serverWorkspaceReady && <span className="connector-session-ready"><CheckCircle2 size={14} /> Workspace saved</span>}
+      {authState === "signed-in" && <button className="secondary-button" disabled={busy || loadingConnections} onClick={signOut}>Sign out</button>}
       {authState === "checking" && <span className="connector-session-ready">Checking…</span>}
     </div>
     {callbackMessage && <div className="connector-notice"><CheckCircle2 size={14} />{callbackMessage}<button onClick={() => setCallbackMessage("")} aria-label="Dismiss"><X size={13} /></button></div>}
