@@ -1,5 +1,34 @@
 # WORLDEX — verification log
 
+## Session 4 — Universal Connect OAuth foundation (2026-11-24)
+
+Merged to `main` via PR #1. Main merge commit: `11c1887a36ed42b04ff1bd6d9cf689cca63e686c`.
+
+Verification ran in GitHub Actions on the final feature-branch head immediately before merge (same source content as the merge):
+- Dependency install: PASS (`pnpm install --frozen-lockfile`).
+- TypeScript: PASS (`pnpm typecheck`).
+- Unit tests: PASS — 69 total, 49 passed, 0 failed, 20 skipped.
+- Vite production build: PASS.
+- Server syntax checks: PASS (`node --check server/index.mjs`, `node --check server/app.mjs`).
+- Database integration tests: SKIPPED because a dedicated `WORLDEX_TEST_DATABASE_URL` was not available.
+- Live provider OAuth consent/token exchange: NOT RUN (provider app credentials and approval not configured).
+- Migration `0002_provider_oauth.sql`: NOT APPLIED (no production database connection/approval was available).
+- Production deployment/health: NOT VERIFIED.
+
+The 20 skipped tests are database-dependent tests. Their skip is not a database pass. The automated OAuth tests use mocked provider HTTP responses and test PKCE, state replay protection, token encryption, scope enforcement, internal workspace checks and Google/GitHub revocation behavior. They do not prove that provider developer apps are approved or that live external OAuth works.
+
+Relevant files:
+- `server/connector-oauth.mjs` and `server/connector-oauth.test.mjs`
+- `db/migrations/0002_provider_oauth.sql`
+- `docs/CONNECTOR_OAUTH_SETUP.md`
+- `docs/API.md`
+
+Remaining launch requirements: register Google/GitHub/LinkedIn provider apps, configure the server-only OAuth client credentials and 32-byte encryption key in the actual deployment secret manager, review and apply migration 0002, then run staging OAuth tests. No user-facing API key entry is required.
+
+---
+
+# WORLDEX — verification log
+
 ## Session 3 (Claude) — patch verification and isolated-database test harness
 
 Environment: still a sandbox with **no network (DNS fails), no Docker/MySQL, no browser**. The requested network-enabled
