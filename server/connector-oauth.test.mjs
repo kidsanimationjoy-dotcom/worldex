@@ -23,10 +23,13 @@ function fakeRepo() {
     async saveProviderConnection(connection) {
       const saved = { id:connection.id,provider:connection.provider,accountLabel:connection.accountLabel,scopeCategories:connection.scopeCategories,status:"connected" };
       connections.push(saved);
-      this.secrets.set(saved.id,{id:saved.id,provider:connection.provider,scopeCategories:connection.scopeCategories,status:"connected",accessTokenCiphertext:connection.accessTokenCiphertext,refreshTokenCiphertext:connection.refreshTokenCiphertext,expiresAt:connection.expiresAt?.toISOString()??null});
+      this.secrets.set(saved.id,{id:saved.id,userId:connection.userId,workspaceId:connection.workspaceId,provider:connection.provider,scopeCategories:connection.scopeCategories,status:"connected",accessTokenCiphertext:connection.accessTokenCiphertext,refreshTokenCiphertext:connection.refreshTokenCiphertext,expiresAt:connection.expiresAt?.toISOString()??null});
       return saved;
     },
-    async getProviderConnectionSecrets(_userId,_workspaceId,id) { return this.secrets.get(id)??null; },
+    async getProviderConnectionSecrets(userId,workspaceId,id) {
+      const item=this.secrets.get(id);
+      return item?.userId===userId && item?.workspaceId===workspaceId ? item : null;
+    },
     async updateProviderConnectionTokens(update) { const current=this.secrets.get(update.id); if(current)this.secrets.set(update.id,{...current,accessTokenCiphertext:update.accessTokenCiphertext,refreshTokenCiphertext:update.refreshTokenCiphertext,expiresAt:update.expiresAt?.toISOString()??null}); },
   };
 }
