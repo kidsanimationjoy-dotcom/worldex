@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createPool } from "mysql2/promise";
 import { createApp } from "./app.mjs";
 import { createAuthService } from "./auth-service.mjs";
+import { createConnectorOAuthService } from "./connector-oauth.mjs";
 import { createManusProvider } from "./manus-provider.mjs";
 import { runMigrations } from "./migrate.mjs";
 import { createMysqlRepository } from "./repository.mjs";
@@ -21,7 +22,8 @@ if (env.WORLDEX_AUTO_MIGRATE === "1") {
 const repo = createMysqlRepository(pool);
 const provider = createManusProvider({ apiUrl: env.MANUS_API_URL, apiKey: env.MANUS_API_KEY, projectId: env.MANUS_PROJECT_ID, portalUrl: env.MANUS_OAUTH_PORTAL_URL });
 const auth = createAuthService({ repo, provider, env });
-const app = createApp({ repo, auth, provider, env });
+const connections = createConnectorOAuthService({ repo, env });
+const app = createApp({ repo, auth, provider, connections, env });
 const port = Number(env.API_PORT ?? (env.PORT ? env.PORT : 3001));
 const host = env.PORT ? "0.0.0.0" : "127.0.0.1";
 const server = createServer(app);
