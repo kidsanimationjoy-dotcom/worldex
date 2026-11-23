@@ -70,7 +70,7 @@ export function createApp({ repo, auth, provider, connections, env = process.env
     await repo.health();
     json(res, 200, { status: "ok", database: "ready" });
   }));
-  app.get("/api/status", (_req, res) => json(res, 200, { authConfigured: Boolean(env.MANUS_PROJECT_ID && env.MANUS_OAUTH_API_URL && env.MANUS_OAUTH_PORTAL_URL && env.MANUS_JWT_SECRET), databaseConfigured: Boolean(env.DATABASE_URL), llmConfigured: Boolean(provider?.llmConfigured), llmVerified: false, authProvider: "Manus OAuth", localPasswords: false }));
+  app.get("/api/status", (_req, res) => json(res, 200, { authConfigured: Boolean(env.MANUS_PROJECT_ID && env.MANUS_OAUTH_API_URL && env.MANUS_OAUTH_PORTAL_URL && env.MANUS_JWT_SECRET), databaseConfigured: Boolean(env.DATABASE_URL), llmConfigured: Boolean(provider?.llmConfigured), llmVerified: false, authProvider: "Manus OAuth", localPasswords: false, connectorTokenEncryptionConfigured: Boolean(connections?.isEncryptionConfigured), connectorProviders: connections?.listProviders().map(({id,name,configured,supportedScopes})=>({id,name,configured,supportedScopes})) ?? [] }));
 
   app.post("/api/auth/oauth/start", run(async (req, res) => {
     if (!(await rate(req, res, "oauth-start", 10, 600))) return;
