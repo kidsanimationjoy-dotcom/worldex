@@ -65,6 +65,11 @@ export default function App() {
   const current = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) ?? null;
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("worldex_oauth") || params.has("worldex_auth")) setPage("connections");
+  }, []);
+
+  useEffect(() => {
     const ok = saveState(state);
     setSaved(ok);
   }, [state]);
@@ -197,7 +202,7 @@ export default function App() {
         {page === "chat" && <ChatView workspaceName={current.name} chats={current.chats} createSignal={chatCreateRequest} onCreateHandled={() => setChatCreateRequest(false)} onCreate={() => addChat(current.id)} onSaveDraft={(chatId, text) => saveChatDraft(current.id, chatId, text)} onRename={(chatId, title) => changeChat(current.id, chatId, (chat) => ({ ...chat, title, updatedAt: timeNow() }), "Conversation renamed")} onArchive={(chatId, archived) => changeChat(current.id, chatId, (chat) => ({ ...chat, archivedAt: archived ? timeNow() : undefined, updatedAt: timeNow() }), archived ? "Conversation archived" : "Conversation reopened")} />}
         {page === "workspaces" && <WorkspaceView current={current} workspaces={state.workspaces} policies={state.accessPolicies} onSwitch={switchWorkspace} onNew={() => setCreatingWorkspace(true)} onOpenSettings={() => setPage("settings")} />}
         {page === "opportunities" && <OpportunityFinder />}
-        {page === "connections" && <ConnectView activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
+        {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
         {page === "settings" && <SettingsView workspace={current} state={state} updateWorkspace={updateWorkspace} setOverview={(value) => setState((previous) => ({ ...previous, crossWorkspaceOverview: value }))} onReset={() => { if (window.confirm("Delete the locally saved WORLDEX data in this browser? This cannot be undone.")) { localStorage.removeItem("worldex.mvp.state.v1"); setState(blankState()); } }} />}
         {page === "status" && <StatusView />}
         {page === "dropship" && <DropshipView />}
