@@ -19,10 +19,15 @@ function fakeRepo() {
     async createOAuthTransaction(tx) { transactions.set(tx.stateHash, { ...tx, expiresAt: tx.expiresAt.toISOString() }); },
     async getOAuthTransaction(hash) { return transactions.get(hash) ?? null; },
     async deleteOAuthTransaction(hash) { return transactions.delete(hash); },
+    secrets:new Map(),
     async saveProviderConnection(connection) {
       const saved = { id:connection.id,provider:connection.provider,accountLabel:connection.accountLabel,scopeCategories:connection.scopeCategories,status:"connected" };
-      connections.push(saved); return saved;
+      connections.push(saved);
+      this.secrets.set(saved.id,{id:saved.id,provider:connection.provider,scopeCategories:connection.scopeCategories,status:"connected",accessTokenCiphertext:connection.accessTokenCiphertext,refreshTokenCiphertext:connection.refreshTokenCiphertext,expiresAt:connection.expiresAt?.toISOString()??null});
+      return saved;
     },
+    async getProviderConnectionSecrets(_userId,_workspaceId,id) { return this.secrets.get(id)??null; },
+    async updateProviderConnectionTokens(update) { const current=this.secrets.get(update.id); if(current)this.secrets.set(update.id,{...current,accessTokenCiphertext:update.accessTokenCiphertext,refreshTokenCiphertext:update.refreshTokenCiphertext,expiresAt:update.expiresAt?.toISOString()??null}); },
   };
 }
 test("AES-256-GCM encrypts and authenticates secrets", () => {
@@ -87,4 +92,17 @@ test("callback state cannot be replayed or substituted across providers", async 
   await assert.rejects(service.complete({providerId:"linkedin",state,code:"code"}), /could not be verified/);
   assert.equal(await service.cancel(state),true);
   assert.equal(await service.getTransaction(state),null);
+});
+
+test("internal token access enforces scope groups and returns plaintext only to server code", async () => {
+  const repo=fakeRepo();
+  const service=createConnectorOAuthService({repo,env,fetchImpl:async (url)=>String(url).includes("/token")?{ok:true,json:async()=>({access_token:"opaque-access",expires_in:3600,scope:"openid email profile"})}:{ok:true,json:async()=>({sub:"subject-7",email:"private@example.com"})}});
+  const started=await service.start({userId:"user-1",workspaceId:"ws-1",providerId:"google",requestedScopes:["Profile"],redirectOrigin:"https://worldex.example"});
+  const state=new URL(started.authorizationUrl).searchParams.get("state");
+  const saved=await service.complete({providerId:"google",state,code:"code-1"});
+  const token=await service.getAccessToken({userId:"user-1",workspaceId:"ws-1",connectionId:saved.id,requiredScope:"Profile"});
+  assert.equal(token.accessToken,"opaque-access");
+  assert.equal(token.provider,"google");
+  await assert.rejects(service.getAccessToken({userId:"user-1",workspaceId:"ws-1",connectionId:saved.id,requiredScope:"Messages"}),/not authorized/);
+  await assert.rejects(service.getAccessToken({userId:"other-user",workspaceId:"ws-1",connectionId:saved.id}),/not found/);
 });
