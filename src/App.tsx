@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type FormEvent, type CSSProperties } from "react";
 import {
   Activity, AlertCircle, Archive, ArrowDownRight, ArrowRight, BadgeCheck, BookOpen,
   Building2, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3,
@@ -67,6 +67,12 @@ function activity(label: string): ActivityItem { return { id: newId("evt"), labe
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
+  const [accountAuth, setAccountAuth] = useState<"checking" | "signed-in" | "signed-out" | "unavailable">("checking");
+  const [accountCsrfToken, setAccountCsrfToken] = useState("");
+  const [accountWorkspaceReady, setAccountWorkspaceReady] = useState(false);
+  const [accountCheckComplete, setAccountCheckComplete] = useState(false);
+  const [accountSyncStatus, setAccountSyncStatus] = useState<"local" | "import" | "saving" | "saved" | "error">("local");
+  const accountSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<PageKey>("home");
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -80,9 +86,110 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Once an account workspace is active, the server is authoritative.
+    // Keep the existing browser-local profile untouched as a device-only backup.
+    if (accountWorkspaceReady) {
+      setSaved(true);
+      return;
+    }
     const ok = saveState(state);
     setSaved(ok);
-  }, [state]);
+  }, [state, accountWorkspaceReady]);
+
+  useEffect(() => {
+    let active = true;
+    const bootstrapAccount = async () => {
+      try {
+        const meResponse = await fetch("/api/auth/me", { credentials: "same-origin" });
+        if (meResponse.status === 401) {
+          if (active) setAccountAuth("signed-out");
+          return;
+        }
+        if (!meResponse.ok) {
+          if (active) setAccountAuth("unavailable");
+          return;
+        }
+        const me = await meResponse.json();
+        if (!me.authenticated) {
+          if (active) setAccountAuth("signed-out");
+          return;
+        }
+        if (active) {
+          setAccountAuth("signed-in");
+          setAccountCsrfToken(typeof me.csrfToken === "string" ? me.csrfToken : "");
+        }
+
+        const stateResponse = await fetch("/api/state", { credentials: "same-origin" });
+        if (!stateResponse.ok) throw new Error("Account workspace could not be loaded");
+        const serverState = await stateResponse.json();
+        if (!active) return;
+
+        if (Array.isArray(serverState.workspaces) && serverState.workspaces.length > 0) {
+          // Preserve any device-only work before switching to the account's server state.
+          const deviceState = loadState();
+          if (deviceState.workspaces.length > 0) {
+            try {
+              window.localStorage.setItem("worldex.mvp.device-backup.v1", JSON.stringify(deviceState));
+            } catch {
+              // The server copy remains safe; failure to create an optional local backup is non-fatal.
+            }
+          }
+          setState(serverState as AppState);
+          setAccountWorkspaceReady(true);
+          setAccountSyncStatus("saved");
+        } else {
+          // Never import a browser profile automatically. The user must choose
+          // "Save workspace to account" from Universal Connect.
+          setAccountWorkspaceReady(false);
+          setAccountSyncStatus("import");
+        }
+      } catch {
+        if (active) {
+          setAccountAuth("unavailable");
+          setAccountSyncStatus("local");
+        }
+      } finally {
+        if (active) setAccountCheckComplete(true);
+      }
+    };
+    void bootstrapAccount();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (accountAuth !== "signed-in" || !accountWorkspaceReady || !accountCsrfToken) return;
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setAccountSyncStatus("saving");
+      accountSaveQueue.current = accountSaveQueue.current
+        .catch(() => undefined)
+        .then(async () => {
+          const response = await fetch("/api/state", {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": accountCsrfToken },
+            body: JSON.stringify(state),
+          });
+          if (response.status === 401) {
+            if (active) {
+              setAccountAuth("signed-out");
+              setAccountWorkspaceReady(false);
+            }
+            throw new Error("Your WORLDEX session expired. Sign in again to continue account sync.");
+          }
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error?.message ?? "Account sync failed");
+          if (active) setAccountSyncStatus("saved");
+        })
+        .catch(() => {
+          if (active) setAccountSyncStatus("error");
+        });
+    }, 500);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [state, accountAuth, accountWorkspaceReady, accountCsrfToken]);
 
   useEffect(() => {
     if (current) document.documentElement.style.setProperty("--workspace-accent", accentMap[current.accent]);
@@ -176,6 +283,11 @@ export default function App() {
     updateWorkspace(workspaceId, (workspace) => ({ ...workspace, chats: workspace.chats.map((chat) => chat.id === chatId ? change(chat) : chat) }), label);
   };
 
+  if (!accountCheckComplete) {
+    return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#090B12", color: "#DDE5F5" }}>
+      <p>Checking your WORLDEX account…</p>
+    </div>;
+  }
   if (!state.onboarded || !current) {
     return <Onboarding onCreate={createWorkspace} existingCount={state.workspaces.length} />;
   }
@@ -197,12 +309,12 @@ export default function App() {
           return <button key={key} className={`nav-item ${page === key ? "active" : ""}`} aria-current={page === key ? "page" : undefined} onClick={() => handleNavigate(key)}><Icon size={16} strokeWidth={1.8} /><span>{label}</span>{key === "connections" && <i className="nav-status-dot" />}</button>;
         })}</div>)}
       </nav>
-      <div className="sidebar-bottom"><button className="aurix-mini" onClick={() => handleNavigate("chat")}><span className="aurix-avatar small"><Sparkles size={13} /></span><span><b>AURIX</b><small>AI not configured</small></span><span className="status-dot status-dot-amber" /></button><div className="sidebar-local"><span className="local-mark" /><span>Local preview</span><span className="local-separator">·</span><span>{saved ? "Saved" : "Storage unavailable"}</span></div></div>
+      <div className="sidebar-bottom"><button className="aurix-mini" onClick={() => handleNavigate("chat")}><span className="aurix-avatar small"><Sparkles size={13} /></span><span><b>AURIX</b><small>AI not configured</small></span><span className="status-dot status-dot-amber" /></button><div className="sidebar-local"><span className="local-mark" /><span>{accountWorkspaceReady ? "Account workspace" : "Local preview"}</span><span className="local-separator">·</span><span>{accountWorkspaceReady ? (accountSyncStatus === "saving" ? "Saving…" : accountSyncStatus === "saved" ? "Synced" : accountSyncStatus === "error" ? "Sync failed" : "Account") : accountAuth === "signed-in" ? "Save to account" : saved ? "Saved" : "Storage unavailable"}</span></div></div>
     </aside>
     <div className="app-main">
       <header className="topbar">
         <div className="topbar-left"><button className="mobile-menu-button icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Menu size={19} /></button><div className="breadcrumbs"><span>{current.kind}</span><ChevronRight size={13} /><b>{pageLabels[page]}</b></div></div>
-        <div className="topbar-right"><div className="local-badge"><span className="status-dot status-dot-mint" /> LOCAL PREVIEW</div><div className="topbar-divider" />
+        <div className="topbar-right"><div className="local-badge"><span className={`status-dot ${accountWorkspaceReady ? accountSyncStatus === "error" ? "status-dot-amber" : "status-dot-mint" : "status-dot-muted"}`} /> {accountWorkspaceReady ? accountSyncStatus === "saving" ? "ACCOUNT SYNCING" : accountSyncStatus === "error" ? "SYNC NEEDS ATTENTION" : "ACCOUNT WORKSPACE" : accountAuth === "signed-in" ? "ACCOUNT IMPORT NEEDED" : "LOCAL PREVIEW"}</div><div className="topbar-divider" />
           <button className="workspace-identity" title={`Current workspace: ${current.name}`} onClick={() => setPage("workspaces")}><span className="identity-mark" style={{ background: "var(--workspace-accent)" }}>{current.logo}</span><span><b>{current.name}</b><small>{current.kind}</small></span><ChevronDown size={14} /></button>
           <button className="icon-button help-button" aria-label="Product status and help" title="Product status" onClick={() => setPage("status")}><CircleHelp size={17} /></button>
         </div>
@@ -212,14 +324,14 @@ export default function App() {
         {page === "chat" && <ChatView workspaceName={current.name} chats={current.chats} createSignal={chatCreateRequest} onCreateHandled={() => setChatCreateRequest(false)} onCreate={() => addChat(current.id)} onSaveDraft={(chatId, text) => saveChatDraft(current.id, chatId, text)} onRename={(chatId, title) => changeChat(current.id, chatId, (chat) => ({ ...chat, title, updatedAt: timeNow() }), "Conversation renamed")} onArchive={(chatId, archived) => changeChat(current.id, chatId, (chat) => ({ ...chat, archivedAt: archived ? timeNow() : undefined, updatedAt: timeNow() }), archived ? "Conversation archived" : "Conversation reopened")} />}
         {page === "workspaces" && <WorkspaceView current={current} workspaces={state.workspaces} policies={state.accessPolicies} onSwitch={switchWorkspace} onNew={() => setCreatingWorkspace(true)} onOpenSettings={() => setPage("settings")} />}
         {page === "opportunities" && <OpportunityFinder />}
-        {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
+        {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onServerWorkspaceReady={() => { setAccountWorkspaceReady(true); setAccountSyncStatus("saved"); }} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
         {page === "settings" && <SettingsView workspace={current} state={state} updateWorkspace={updateWorkspace} setOverview={(value) => setState((previous) => ({ ...previous, crossWorkspaceOverview: value }))} onReset={() => { if (window.confirm("Delete the locally saved WORLDEX data in this browser? This cannot be undone.")) { localStorage.removeItem("worldex.mvp.state.v1"); setState(blankState()); } }} />}
         {page === "status" && <StatusView />}
         {page === "dropship" && <DropshipView />}
         {page === "games" && <GameStudioView workspace={current} updateWorkspace={(update, label) => updateWorkspace(current.id, update, label)} />}
         {!(["home", "chat", "workspaces", "opportunities", "connections", "settings", "status", "dropship", "games"] as PageKey[]).includes(page) && <CapabilityPage page={page} />}
       </main>
-      <footer className="app-footer"><span>WORLDEX <i>·</i> ONE WORLD. UNLIMITED POSSIBILITIES.</span><span><span className="footer-dot" /> Browser-local MVP · <button onClick={() => setPage("status")}>See what’s live</button></span></footer>
+      <footer className="app-footer"><span>WORLDEX <i>·</i> ONE WORLD. UNLIMITED POSSIBILITIES.</span><span><span className="footer-dot" /> {accountWorkspaceReady ? "Account-backed workspace" : "Browser-local preview"} · <button onClick={() => setPage("status")}>See what’s live</button></span></footer>
     </div>
   </div>;
 }
@@ -274,7 +386,7 @@ function targetIds(policy: AccessPolicy, workspaces: Workspace[]) {
   return policy.shareWithAll ? workspaces.map((workspace) => workspace.id).filter((id) => id !== policy.ownerWorkspaceId) : policy.targetWorkspaceIds;
 }
 
-function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke }: { appState: AppState; activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void }) {
+function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke, onServerWorkspaceReady }: { appState: AppState; activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void; onServerWorkspaceReady: () => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All categories");
   const [showForm, setShowForm] = useState(false);
@@ -360,7 +472,8 @@ function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreate
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message ?? "Workspace could not be saved to your account");
       await loadConnections();
-      setConnectionNotice("Workspace saved securely to your WORLDEX account. You can now connect providers.");
+      onServerWorkspaceReady();
+      setConnectionNotice("Workspace saved securely to your WORLDEX account. Changes will now sync to your account automatically.");
     } catch (error) { setApiMessage(error instanceof Error ? error.message : "Workspace sync failed"); }
     finally { setBusy(false); }
   };
