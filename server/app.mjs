@@ -17,7 +17,7 @@ const cookieValue = (request, name) => {
 };
 const json = (response, status, body) => response.status(status).json(body);
 
-export function createApp({ repo, auth, provider, env = process.env, logger = console, staticDirectory = resolvePath(root, "dist") }) {
+export function createApp({ repo, auth, provider, connections, env = process.env, logger = console, staticDirectory = resolvePath(root, "dist") }) {
   if (!repo || !auth) throw new Error("Repository and authentication service are required");
   const app = express();
   app.disable("x-powered-by");
@@ -97,6 +97,71 @@ export function createApp({ repo, auth, provider, env = process.env, logger = co
     const secure = new URL(current.session.origin).protocol === "https:";
     res.setHeader("Set-Cookie", makeCookie(SESSION_COOKIE, "", { secure, maxAge: 0 }));
     json(res, 200, { ok: true });
+  }));
+
+  app.get("/api/connections/providers", run(async (req,res) => {
+    await loadAuth(req,true);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    json(res,200,{providers:connections.listProviders()});
+  }));
+  app.get("/api/connections", run(async (req,res) => {
+    await loadAuth(req,true);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    const workspaceId=typeof req.query.workspaceId==="string"?req.query.workspaceId:"";
+    if (!workspaceId) throw new ValidationError("workspaceId is required");
+    if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    json(res,200,{connections:await repo.listProviderConnections(req.auth.user.id,workspaceId)});
+  }));
+  app.post("/api/connections/:provider/start", run(async (req,res) => {
+    await loadAuth(req,true); requireMutation(req);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    if (!(await rate(req,res,`connector-start:${req.auth.user.id}`,10,600))) return;
+    const workspaceId=typeof req.body?.workspaceId==="string"?req.body.workspaceId:"";
+    const scopes=req.body?.scopes;
+    if (!workspaceId) throw new ValidationError("workspaceId is required");
+    if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    const started=await connections.start({userId:req.auth.user.id,workspaceId,providerId:req.params.provider,requestedScopes:scopes,redirectOrigin:req.auth.session.origin});
+    json(res,200,started);
+  }));
+  app.get("/api/connections/oauth/callback/:provider", run(async (req,res) => {
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    const state=typeof req.query.state==="string"?req.query.state:"";
+    const transaction=await connections.getTransaction(state);
+    if (!transaction || transaction.provider!==req.params.provider) throw authError(400,"oauth_state_invalid","The authorization request expired or could not be verified");
+    const token=cookieValue(req,SESSION_COOKIE);
+    const callbackAuth=await auth.resolveSession(token,transaction.redirectOrigin,{safeRead:true});
+    if (!callbackAuth || callbackAuth.user.id!==transaction.userId) {
+      await connections.cancel(state);
+      const returnUrl=new URL("/",transaction.redirectOrigin);
+      returnUrl.searchParams.set("worldex_oauth","signin");
+      return res.redirect(303,returnUrl.toString());
+    }
+    const returnUrl=new URL("/",transaction.redirectOrigin);
+    returnUrl.searchParams.set("worldex_oauth","failed");
+    returnUrl.searchParams.set("provider",transaction.provider);
+    if (typeof req.query.error==="string") {
+      await connections.cancel(state);
+      returnUrl.searchParams.set("reason","denied");
+      return res.redirect(303,returnUrl.toString());
+    }
+    try {
+      await connections.complete({providerId:transaction.provider,state,code:req.query.code});
+      returnUrl.searchParams.set("worldex_oauth","connected");
+      returnUrl.searchParams.delete("reason");
+    } catch (error) {
+      logger.warn?.("Provider authorization did not complete",{provider:transaction.provider,code:error?.code??"oauth_failed"});
+      returnUrl.searchParams.set("reason","setup");
+    }
+    return res.redirect(303,returnUrl.toString());
+  }));
+  app.delete("/api/connections/:connectionId", run(async (req,res) => {
+    await loadAuth(req,true); requireMutation(req);
+    if (!connections) throw authError(503,"connectors_unavailable","Provider connections are not configured");
+    const workspaceId=typeof req.body?.workspaceId==="string"?req.body.workspaceId:"";
+    if (!workspaceId) throw new ValidationError("workspaceId is required");
+    if (!(await repo.ownsWorkspace(req.auth.user.id,workspaceId))) throw authError(404,"workspace_not_found","Workspace not found");
+    if (!(await repo.disconnectProviderConnection(req.auth.user.id,workspaceId,req.params.connectionId))) throw authError(404,"connection_not_found","Connection not found");
+    json(res,200,{ok:true,providerAccessRevoked:false,localTokensDeleted:true});
   }));
 
   app.get("/api/state", run(async (req, res) => {
