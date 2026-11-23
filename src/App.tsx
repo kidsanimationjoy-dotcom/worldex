@@ -398,7 +398,11 @@ function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreate
       if (!response.ok) throw new Error(data.error?.message ?? "Could not disconnect this account");
       await loadConnections();
       setSelectedConnection(null);
-      setConnectionNotice("WORLDEX removed its stored account tokens. Review the provider's security settings separately to revoke its app permission there too.");
+      setConnectionNotice(data.providerAccessRevoked
+        ? "WORLDEX disconnected this account and confirmed that the provider revoked its authorization."
+        : data.providerRevocationSupported
+          ? "WORLDEX deleted its local tokens, but the provider did not confirm revocation. Review the provider's connected-app settings."
+          : "WORLDEX deleted its local tokens. This provider does not expose a supported revocation endpoint here, so remove WORLDEX from its connected-app settings as well.");
       setSelectedConnector(null);
     } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not disconnect account"); }
     finally { setBusy(false); }
