@@ -209,5 +209,40 @@ export function createConnectorOAuthService({ repo, env = process.env, fetchImpl
     return connection;
   }
 
-  return { listProviders, start, getTransaction, cancel, complete, isEncryptionConfigured: Boolean(key) };
+  async function getAccessToken({ userId, workspaceId, connectionId, requiredScope }) {
+    const saved = await repo.getProviderConnectionSecrets(userId,workspaceId,connectionId);
+    if (!saved || saved.status !== "connected" || !saved.accessTokenCiphertext) throw fail(404,"connection_not_found","Connected account was not found");
+    if (requiredScope && !saved.scopeCategories.includes(requiredScope)) throw fail(403,"connection_scope_missing","This account was not authorized for the requested permission");
+    let current=saved;
+    if (current.expiresAt && Date.parse(current.expiresAt)<=now()+60_000) {
+      if (!current.refreshTokenCiphertext) throw fail(409,"connection_reauthorization_required","This provider session expired. Reconnect the account to continue");
+      const config=configs[current.provider];
+      if (!config?.configured) throw fail(503,"provider_not_configured","This integration is not enabled by WORLDEX yet");
+      try {
+        const refreshToken=decryptSecret(current.refreshTokenCiphertext,key);
+        const response=await readJson(await fetchImpl(config.tokenUrl,{
+          method:"POST",headers:{"Accept":"application/json","Content-Type":"application/x-www-form-urlencoded"},
+          body:new URLSearchParams({grant_type:"refresh_token",refresh_token:refreshToken,client_id:config.clientId,client_secret:config.clientSecret}),
+        }),config.name,"token refresh");
+        if (typeof response.access_token!=="string" || !response.access_token) throw fail(502,"provider_token_missing","Provider did not return a refreshed access token");
+        const expiresAt=Number.isFinite(Number(response.expires_in))&&Number(response.expires_in)>0?new Date(now()+Number(response.expires_in)*1000):null;
+        const nextRefresh=typeof response.refresh_token==="string"?response.refresh_token:refreshToken;
+        const nextAccessCiphertext=encryptSecret(response.access_token,key);
+        await repo.updateProviderConnectionTokens({
+          id:current.id,userId,workspaceId,accessTokenCiphertext:nextAccessCiphertext,
+          refreshTokenCiphertext:encryptSecret(nextRefresh,key),providerScopes:typeof response.scope==="string"?response.scope.split(/[ ,]+/).filter(Boolean):[],
+          tokenType:typeof response.token_type==="string"?response.token_type.slice(0,32):"Bearer",expiresAt,
+        });
+        current={...current,accessTokenCiphertext:nextAccessCiphertext,expiresAt:expiresAt?.toISOString()??null};
+      } catch(error) {
+        if (error?.code==="provider_request_failed" || error?.code==="provider_invalid_response") {
+          throw fail(409,"connection_reauthorization_required","WORLDEX could not renew this provider session. Reconnect the account to continue");
+        }
+        throw error;
+      }
+    }
+    return { provider:current.provider, accessToken:decryptSecret(current.accessTokenCiphertext,key), scopeCategories:current.scopeCategories };
+  }
+
+  return { listProviders, start, getTransaction, cancel, complete, getAccessToken, isEncryptionConfigured: Boolean(key) };
 }
