@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/components/ChatView.tsx","./src/components/Onboarding.tsx","./src/components/OpportunityFinder.tsx","./src/lib/opportunities.ts","./src/lib/store.ts","./vite.config.ts"],"version":"5.7.2"}
