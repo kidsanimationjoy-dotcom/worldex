@@ -52,7 +52,7 @@ The server deliberately does not auto-apply migrations to the shared database. R
 
 ## What is still not production-complete
 
-- The main product UI still has legacy browser-local state in `src/App.tsx` and `src/lib/store.ts`. Universal Connect has its own sign-in and one-time workspace-save path, but the full app is not yet using the server as the sole source of truth.
+- The main UI now checks the authenticated session at startup, restores a signed-in user's server workspace state, and automatically writes later workspace changes to `/api/state` with the session CSRF token. The first transfer from a browser-local profile remains an explicit **Save workspace to account** action; it is never silently imported. In account mode the server is authoritative and account data is not copied into browser local storage. Signed-out preview mode remains browser-local.
 - Provider credentials, domain callback allowlists, migration 0002 and real provider application approvals are not configured.
 - Real provider consent/token exchanges have not been tested against live Google, GitHub or LinkedIn apps.
 - No provider API action (publishing, messaging, ads, store management, etc.) should be represented as implemented merely because OAuth works.
@@ -64,7 +64,7 @@ The server deliberately does not auto-apply migrations to the shared database. R
 GitHub Actions passed on the merged main commit `11c1887a36ed42b04ff1bd6d9cf689cca63e686c`:
 - Dependency install: passed.
 - TypeScript typecheck: passed.
-- Unit tests: 46 passed, 0 failed.
+- Unit tests: 49 passed, 0 failed; 20 database-dependent tests skipped without a dedicated test database.
 - Database-dependent tests: 20 skipped because no dedicated test DB was configured.
 - Vite production build: passed.
 - Server syntax checks: passed.
