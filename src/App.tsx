@@ -50,6 +50,16 @@ const connectionGroups = [
   { category: "Developer APIs", items: [{ name: "GitHub", note: "Repositories and releases", state: "Not yet supported" }] },
 ] as const;
 const connectionCategoryNames = connectionGroups.map((item) => item.category);
+const oauthProviderForConnector: Record<string, string> = {
+  "Google Drive": "google", Gmail: "google", "Google Analytics": "google", GitHub: "github", LinkedIn: "linkedin",
+};
+const requiredScopeForConnector: Partial<Record<string, ResourceScope>> = {
+  "Google Drive": "Content", Gmail: "Messages", "Google Analytics": "Analytics", LinkedIn: "Publishing",
+};
+const defaultScopesForConnector = (name: string): ResourceScope[] => {
+  const required = requiredScopeForConnector[name];
+  return required ? ["Profile", required] : ["Profile"];
+};
 const resourceScopes: ResourceScope[] = ["Profile", "Content", "Publishing", "Analytics", "Messages"];
 const timeNow = () => new Date().toISOString();
 
@@ -264,12 +274,144 @@ function targetIds(policy: AccessPolicy, workspaces: Workspace[]) {
   return policy.shareWithAll ? workspaces.map((workspace) => workspace.id).filter((id) => id !== policy.ownerWorkspaceId) : policy.targetWorkspaceIds;
 }
 
-function ConnectView({ activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke }: { activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void }) {
+function ConnectView({ appState, activeWorkspace, workspaces, policies, onCreatePolicy, onRevoke }: { appState: AppState; activeWorkspace: Workspace; workspaces: Workspace[]; policies: AccessPolicy[]; onCreatePolicy: (policy: AccessPolicy) => void; onRevoke: (id: string) => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All categories");
   const [showForm, setShowForm] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [selectedConnector, setSelectedConnector] = useState<{ name: string; note: string; state: string; category: string } | null>(null);
+  const [selectedScopes, setSelectedScopes] = useState<ResourceScope[]>(["Profile"]);
+  const [providers, setProviders] = useState<{ id: string; name: string; configured: boolean; supportedScopes: string[] }[]>([]);
+  const [providerConnections, setProviderConnections] = useState<{ id: string; provider: string; accountLabel: string; status: string; scopeCategories: string[] }[]>([]);
+  const [csrfToken, setCsrfToken] = useState("");
+  const [authState, setAuthState] = useState<"checking" | "signed-in" | "signed-out">("checking");
+  const [serverWorkspaceReady, setServerWorkspaceReady] = useState(false);
+  const [loadingConnections, setLoadingConnections] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [apiMessage, setApiMessage] = useState("");
+  const [callbackMessage, setCallbackMessage] = useState("");
+  const [connectionNotice, setConnectionNotice] = useState("");
+  const [selectedConnection, setSelectedConnection] = useState<{ id: string; provider: string; accountLabel: string; scopeCategories: string[] } | null>(null);
+
+  const loadConnections = async () => {
+    const meResponse = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (meResponse.status === 401) { setAuthState("signed-out"); setServerWorkspaceReady(false); return; }
+    if (!meResponse.ok) throw new Error("WORLDEX sign-in status could not be checked");
+    const me = await meResponse.json();
+    if (!me.authenticated) { setAuthState("signed-out"); setServerWorkspaceReady(false); return; }
+    setAuthState("signed-in");
+    setCsrfToken(me.csrfToken ?? "");
+    const [providerResponse, stateResponse] = await Promise.all([
+      fetch("/api/connections/providers", { credentials: "same-origin" }),
+      fetch("/api/state", { credentials: "same-origin" }),
+    ]);
+    if (!providerResponse.ok || !stateResponse.ok) throw new Error("The WORLDEX server could not load connector settings");
+    const providerData = await providerResponse.json();
+    const serverState = await stateResponse.json();
+    setProviders(providerData.providers ?? []);
+    const workspaceReady = (serverState.workspaces ?? []).some((workspace: Workspace) => workspace.id === activeWorkspace.id);
+    setServerWorkspaceReady(workspaceReady);
+    if (workspaceReady) {
+      const connectionResponse = await fetch(`/api/connections?workspaceId=${encodeURIComponent(activeWorkspace.id)}`, { credentials: "same-origin" });
+      if (!connectionResponse.ok) throw new Error("Connections for this workspace could not be loaded");
+      const connectionData = await connectionResponse.json();
+      setProviderConnections(connectionData.connections ?? []);
+    } else setProviderConnections([]);
+  };
+
+  useEffect(() => {
+    let active = true;
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get("worldex_oauth");
+    const authStatus = params.get("worldex_auth");
+    if (oauthStatus === "connected") setCallbackMessage("Provider account connected successfully.");
+    else if (oauthStatus === "signin") setCallbackMessage("Your WORLDEX sign-in session was not available when the provider returned. Sign in and try again.");
+    else if (oauthStatus === "failed") setCallbackMessage(params.get("reason") === "denied" ? "The provider authorization was cancelled." : "The provider could not complete authorization. Check its setup and try again.");
+    else if (authStatus === "connected") setCallbackMessage("You are signed in to WORLDEX. Save your local workspace to your account to enable connections.");
+    else if (authStatus === "failed") setCallbackMessage("WORLDEX sign-in was cancelled or could not be completed.");
+    if (oauthStatus || authStatus) window.history.replaceState({}, document.title, window.location.pathname);
+    const run = async () => {
+      try { await loadConnections(); }
+      catch (error) { if (active) setApiMessage(error instanceof Error ? error.message : "Could not load connection settings"); }
+      finally { if (active) setLoadingConnections(false); }
+    };
+    void run();
+    return () => { active = false; };
+  }, [activeWorkspace.id]);
+
+  const signIn = async () => {
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch("/api/auth/oauth/start", { method: "POST", credentials: "same-origin" });
+      const data = await response.json();
+      if (!response.ok || !data.authorizationUrl) throw new Error(data.error?.message ?? "WORLDEX sign-in is not configured yet");
+      window.location.assign(data.authorizationUrl);
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not start WORLDEX sign-in"); setBusy(false); }
+  };
+
+  const syncWorkspace = async () => {
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch("/api/state", {
+        method: "PUT", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify(appState),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message ?? "Workspace could not be saved to your account");
+      await loadConnections();
+      setConnectionNotice("Workspace saved securely to your WORLDEX account. You can now connect providers.");
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Workspace sync failed"); }
+    finally { setBusy(false); }
+  };
+
+  const startProviderConnection = async () => {
+    if (!selectedConnector) return;
+    const providerId = oauthProviderForConnector[selectedConnector.name];
+    if (!providerId) { setApiMessage("This platform's official connector is not implemented yet."); return; }
+    const providerInfo = providers.find((item) => item.id === providerId);
+    if (!providerInfo?.configured) { setApiMessage("This integration is not enabled by WORLDEX yet."); return; }
+    const scopes = selectedScopes.filter((scope) => providerInfo.supportedScopes.includes(scope));
+    if (!scopes.includes("Profile")) { setApiMessage("Profile permission is required to identify the connected account."); return; }
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch(`/api/connections/${providerId}/start`, {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify({ workspaceId: activeWorkspace.id, scopes }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.authorizationUrl) throw new Error(data.error?.message ?? "Could not start provider authorization");
+      window.location.assign(data.authorizationUrl);
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not start provider authorization"); setBusy(false); }
+  };
+
+  const disconnectProvider = async (connectionId: string) => {
+    setBusy(true); setApiMessage("");
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: "DELETE", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify({ workspaceId: activeWorkspace.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message ?? "Could not disconnect this account");
+      await loadConnections();
+      setSelectedConnection(null);
+      setConnectionNotice("WORLDEX removed its stored account tokens. Review the provider's security settings separately to revoke its app permission there too.");
+      setSelectedConnector(null);
+    } catch (error) { setApiMessage(error instanceof Error ? error.message : "Could not disconnect account"); }
+    finally { setBusy(false); }
+  };
+
+  const providerFor = (name: string) => providers.find((provider) => provider.id === oauthProviderForConnector[name]);
+  const connectedFor = (name: string) => providerConnections.find((connection) => connection.provider === oauthProviderForConnector[name] && connection.status === "connected");
+  const openConnector = (connector: { name: string; note: string; state: string; category: string }) => {
+    setSelectedConnector(connector);
+    setSelectedConnection(connectedFor(connector.name) ?? null);
+    setSelectedScopes(defaultScopesForConnector(connector.name));
+    setApiMessage("");
+  };
   const matching = connectionGroups.flatMap((group) => group.items.map((item) => ({ ...item, category: group.category })))
     .filter((item) => (filter === "All categories" || item.category === filter) && `${item.name} ${item.category} ${item.note}`.toLowerCase().includes(query.toLowerCase()));
   const visiblePolicies = policies.filter((policy) => !policy.revokedAt && (policy.ownerWorkspaceId === activeWorkspace.id || targetIds(policy, workspaces).includes(activeWorkspace.id)));
