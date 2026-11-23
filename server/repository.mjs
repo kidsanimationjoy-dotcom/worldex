@@ -88,6 +88,18 @@ export function createMysqlRepository(pool) {
       );
       return mapProviderConnection(rows[0]);
     },
+    async getProviderConnectionSecrets(userId, workspaceId, connectionId) {
+      const [rows]=await pool.execute(
+        "SELECT id,provider,scope_categories,access_token_ciphertext,refresh_token_ciphertext,expires_at,status FROM provider_connections WHERE id=? AND user_id=? AND workspace_id=? LIMIT 1",
+        [connectionId,userId,workspaceId],
+      );
+      const row=rows[0];
+      return row?{
+        id:row.id,provider:row.provider,scopeCategories:json(row.scope_categories,[]),
+        accessTokenCiphertext:row.access_token_ciphertext,refreshTokenCiphertext:row.refresh_token_ciphertext,
+        expiresAt:row.expires_at?iso(row.expires_at):null,status:row.status,
+      }:null;
+    },
     async listProviderConnections(userId, workspaceId) {
       const [rows]=await pool.execute(
         "SELECT id,provider,provider_account_id,account_label,scope_categories,provider_scopes,status,expires_at,connected_at,updated_at FROM provider_connections WHERE user_id=? AND workspace_id=? ORDER BY connected_at DESC",
