@@ -107,6 +107,12 @@ export function createMysqlRepository(pool) {
       );
       return rows.map(mapProviderConnection);
     },
+    async updateProviderConnectionTokens(update) {
+      await pool.execute(
+        "UPDATE provider_connections SET access_token_ciphertext=?,refresh_token_ciphertext=?,provider_scopes=?,token_type=?,expires_at=?,updated_at=UTC_TIMESTAMP(3) WHERE id=? AND user_id=? AND workspace_id=? AND status='connected'",
+        [update.accessTokenCiphertext,update.refreshTokenCiphertext,JSON.stringify(update.providerScopes),update.tokenType,update.expiresAt?sqlDate(update.expiresAt):null,update.id,update.userId,update.workspaceId],
+      );
+    },
     async disconnectProviderConnection(userId, workspaceId, connectionId) {
       const connection=await pool.getConnection();
       try {
