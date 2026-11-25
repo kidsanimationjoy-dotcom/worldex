@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { constantTimeEqual, csrfTokenForSession, isTrustedSafeRead, makeCookie, OAUTH_NONCE_COOKIE, parseOAuthState, SESSION_COOKIE, sha256 } from "./security.mjs";
 import { authError } from "./auth-service.mjs";
 import { ValidationError, parseAppState, parseTaskRequest } from "./validation.mjs";
-import { registerAurixRoutes } from "./aurix-openai.mjs";
+import { registerAurixRoutes } from "./aurix-groq.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const cookieValue = (request, name) => {
