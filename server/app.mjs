@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { constantTimeEqual, csrfTokenForSession, isTrustedSafeRead, makeCookie, OAUTH_NONCE_COOKIE, parseOAuthState, SESSION_COOKIE, sha256 } from "./security.mjs";
 import { authError } from "./auth-service.mjs";
 import { ValidationError, parseAppState, parseTaskRequest } from "./validation.mjs";
+import { registerAurixRoutes } from "./aurix-openai.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const cookieValue = (request, name) => {
@@ -66,11 +67,13 @@ export function createApp({ repo, auth, provider, connections, env = process.env
   const requireMutation = (request) => auth.verifyMutation({ origin: request.get("Origin"), csrfHeader: request.get("X-CSRF-Token"), auth: request.auth });
   const run = (handler) => async (req, res, next) => { try { await handler(req, res); } catch (error) { next(error); } };
 
+  registerAurixRoutes(app, { env, loadAuth, requireMutation, rate, repo, auth, logger });
+
   app.get("/api/health", run(async (_req, res) => {
     await repo.health();
     json(res, 200, { status: "ok", database: "ready" });
   }));
-  app.get("/api/status", (_req, res) => json(res, 200, { authConfigured: Boolean(env.MANUS_PROJECT_ID && env.MANUS_OAUTH_API_URL && env.MANUS_OAUTH_PORTAL_URL && env.MANUS_JWT_SECRET), databaseConfigured: Boolean(env.DATABASE_URL), llmConfigured: Boolean(provider?.llmConfigured), llmVerified: false, authProvider: "Manus OAuth", localPasswords: false, connectorTokenEncryptionConfigured: Boolean(connections?.isEncryptionConfigured), connectorProviders: connections?.listProviders().map(({id,name,configured,supportedScopes})=>({id,name,configured,supportedScopes})) ?? [] }));
+  app.get("/api/status", (_req, res) => json(res, 200, { authConfigured: Boolean(env.MANUS_PROJECT_ID && env.MANUS_OAUTH_API_URL && env.MANUS_OAUTH_PORTAL_URL && env.MANUS_JWT_SECRET), databaseConfigured: Boolean(env.DATABASE_URL), llmConfigured: Boolean(env.OPENAI_API_KEY), openaiConfigured: Boolean(env.OPENAI_API_KEY), openaiModel: env.OPENAI_MODEL || "gpt-6.2-astra", llmVerified: false, authProvider: "Manus OAuth", localPasswords: false, connectorTokenEncryptionConfigured: Boolean(connections?.isEncryptionConfigured), connectorProviders: connections?.listProviders().map(({id,name,configured,supportedScopes})=>({id,name,configured,supportedScopes})) ?? [] }));
 
   app.post("/api/auth/oauth/start", run(async (req, res) => {
     if (!(await rate(req, res, "oauth-start", 10, 600))) return;
