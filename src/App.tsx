@@ -280,19 +280,6 @@ export default function App() {
     return chat;
   };
 
-  const saveChatDraft = (workspaceId: string, chatId: string, text: string) => {
-    updateWorkspace(workspaceId, (workspace) => ({
-      ...workspace,
-      chats: workspace.chats.map((chat) => chat.id === chatId ? {
-        ...chat,
-        title: chat.messages.length === 0 && chat.title.startsWith("New conversation") ? text.slice(0, 54) : chat.title,
-        updatedAt: timeNow(),
-        state: "draft",
-        messages: [...chat.messages, { id: newId("note"), role: "user", text, createdAt: timeNow(), status: "draft" }],
-      } : chat),
-    }), "Conversation note saved locally");
-  };
-
   const changeChat = (workspaceId: string, chatId: string, change: (chat: Chat) => Chat, label: string) => {
     updateWorkspace(workspaceId, (workspace) => ({ ...workspace, chats: workspace.chats.map((chat) => chat.id === chatId ? change(chat) : chat) }), label);
   };
@@ -335,7 +322,7 @@ export default function App() {
       </header>
       <main className="content-area" key={`${page}:${current.id}`}>
         {page === "home" && <HomeView workspace={current} allWorkspaces={state.workspaces} crossOverview={state.crossWorkspaceOverview} onOpen={handleNavigate} onNewWorkspace={() => setCreatingWorkspace(true)} />}
-        {page === "chat" && <ChatView workspaceName={current.name} chats={current.chats} createSignal={chatCreateRequest} onCreateHandled={() => setChatCreateRequest(false)} onCreate={() => addChat(current.id)} onSaveDraft={(chatId, text) => saveChatDraft(current.id, chatId, text)} onRename={(chatId, title) => changeChat(current.id, chatId, (chat) => ({ ...chat, title, updatedAt: timeNow() }), "Conversation renamed")} onArchive={(chatId, archived) => changeChat(current.id, chatId, (chat) => ({ ...chat, archivedAt: archived ? timeNow() : undefined, updatedAt: timeNow() }), archived ? "Conversation archived" : "Conversation reopened")} />}
+        {page === "chat" && <ChatView workspaceId={current.id} workspaceName={current.name} chats={current.chats} csrfToken={accountCsrfToken} signedIn={accountAuth === "signed-in" && accountWorkspaceReady} createSignal={chatCreateRequest} onCreateHandled={() => setChatCreateRequest(false)} onCreate={() => addChat(current.id)} onRename={(chatId, title) => changeChat(current.id, chatId, (chat) => ({ ...chat, title, updatedAt: timeNow() }), "Conversation renamed")} onArchive={(chatId, archived) => changeChat(current.id, chatId, (chat) => ({ ...chat, archivedAt: archived ? timeNow() : undefined, updatedAt: timeNow() }), archived ? "Conversation archived" : "Conversation reopened")} />}
         {page === "workspaces" && <WorkspaceView current={current} workspaces={state.workspaces} policies={state.accessPolicies} onSwitch={switchWorkspace} onNew={() => setCreatingWorkspace(true)} onOpenSettings={() => setPage("settings")} />}
         {page === "opportunities" && <OpportunityFinder />}
         {page === "connections" && <ConnectView appState={state} activeWorkspace={current} workspaces={state.workspaces} policies={state.accessPolicies} onServerWorkspaceReady={() => { setAccountWorkspaceReady(true); setAccountSyncStatus("saved"); }} onAccountLogout={handleAccountLogout} onCreatePolicy={(policy) => setState((previous) => ({ ...previous, accessPolicies: [policy, ...previous.accessPolicies], workspaces: previous.workspaces.map((workspace) => workspace.id === policy.ownerWorkspaceId ? { ...workspace, activity: [activity(`Local access policy draft created · ${policy.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }))} onRevoke={(id) => setState((previous) => { const existing = previous.accessPolicies.find((policy) => policy.id === id); return { ...previous, accessPolicies: previous.accessPolicies.map((policy) => policy.id === id ? { ...policy, revokedAt: timeNow() } : policy), workspaces: previous.workspaces.map((workspace) => existing?.ownerWorkspaceId === workspace.id ? { ...workspace, activity: [activity(`Local access policy draft revoked · ${existing.provider}`), ...workspace.activity].slice(0, 30) } : workspace) }; })} />}
