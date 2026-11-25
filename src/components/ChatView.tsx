@@ -42,7 +42,7 @@ export function ChatView({ workspaceId, workspaceName, chats, createSignal, csrf
   useEffect(() => {
     let activeRequest = true;
     fetch("/api/status", { credentials: "same-origin" }).then((response) => response.ok ? response.json() : null)
-      .then((status) => { if (activeRequest) setAiConfigured(Boolean(status?.openaiConfigured)); })
+      .then((status) => { if (activeRequest) setAiConfigured(Boolean(status?.groqConfigured)); })
       .catch(() => { if (activeRequest) setAiConfigured(false); });
     return () => { activeRequest = false; };
   }, []);
@@ -67,7 +67,7 @@ export function ChatView({ workspaceId, workspaceName, chats, createSignal, csrf
     const text = draft.trim();
     if (!active || !text || sending) return;
     if (!signedIn || !csrfToken) { setNotice("Sign in to your WORLDEX account to use AURIX AI."); return; }
-    if (!aiConfigured) { setNotice("AURIX AI is not configured. Add OPENAI_API_KEY to the Netlify environment and redeploy."); return; }
+    if (!aiConfigured) { setNotice("AURIX AI is not configured. Add GROQ_API_KEY to the Netlify environment and redeploy."); return; }
     const nextMessages: LiveMessage[] = [...liveMessages, { role: "user", content: text, id: `user-${Date.now()}` }];
     setLiveMessages(nextMessages);
     setDraft("");
@@ -105,11 +105,11 @@ export function ChatView({ workspaceId, workspaceName, chats, createSignal, csrf
     </aside>
 
     <section className="chat-stage">
-      <div className="chat-stage-head"><div className="aurix-lockup"><span className="aurix-avatar"><Sparkles size={18} /></span><span><b>AURIX</b><small>POWERED BY OPENAI</small></span></div><div className="provider-status"><span className={`status-dot ${aiConfigured ? "status-dot-green" : "status-dot-amber"}`} /> {aiConfigured ? "AI CONFIGURED" : "AI NOT CONFIGURED"}</div></div>
-      {!active ? <div className="chat-welcome"><div className="aurix-large"><Sparkles size={25} /></div><div className="eyebrow violet-eyebrow">YOUR WORKSPACE ASSISTANT</div><h1>Think it through.<br /><em>One workspace at a time.</em></h1><p>AURIX uses the OpenAI API through WORLDEX's secure backend. Your API key stays on the server and is never sent to the browser.</p><button className="secondary-button" onClick={startChat}><Plus size={15} /> Start a conversation</button></div> : <>
+      <div className="chat-stage-head"><div className="aurix-lockup"><span className="aurix-avatar"><Sparkles size={18} /></span><span><b>AURIX</b><small>POWERED BY GROQ</small></span></div><div className="provider-status"><span className={`status-dot ${aiConfigured ? "status-dot-green" : "status-dot-amber"}`} /> {aiConfigured ? "AI CONFIGURED" : "AI NOT CONFIGURED"}</div></div>
+      {!active ? <div className="chat-welcome"><div className="aurix-large"><Sparkles size={25} /></div><div className="eyebrow violet-eyebrow">YOUR WORKSPACE ASSISTANT</div><h1>Think it through.<br /><em>One workspace at a time.</em></h1><p>AURIX uses Groq through WORLDEX's secure backend. Ask about business, coding, education, research, writing, technology, and more. Your API key stays on the server.</p><button className="secondary-button" onClick={startChat}><Plus size={15} /> Start a conversation</button></div> : <>
         <div className="active-chat-heading"><div><div className="eyebrow">CURRENT WORKSPACE · {workspaceName}</div><h2>{active.title}</h2><span><Clock3 size={12} /> Updated {timeLabel(active.updatedAt)}</span></div><div className="chat-actions">{renameId === active.id ? <form className="rename-inline" onSubmit={finishRename}><input autoFocus value={renameValue} onChange={(e) => setRenameValue(e.target.value)} aria-label="Conversation name" maxLength={65} /><button aria-label="Save name"><Check size={14} /></button><button type="button" aria-label="Cancel rename" onClick={() => setRenameId(null)}><X size={14} /></button></form> : <button className="icon-button" onClick={() => beginRename(active)} aria-label="Rename chat" title="Rename"><Pencil size={15} /></button>}
           {active.archivedAt ? <button className="secondary-button compact-button" onClick={() => { onArchive(active.id, false); setShowArchived(false); }}>Reopen <ArrowUp size={13} /></button> : <button className="icon-button" onClick={() => onArchive(active.id, true)} aria-label="Archive chat" title="Archive chat"><Archive size={15} /></button>}</div></div>
-        <div className="chat-briefing"><span className="briefing-orbit"><Bot size={16} /></span><div><b>{aiConfigured ? "AURIX is connected to its AI provider." : "AURIX is waiting for its API configuration."}</b><p>{aiConfigured ? "Replies are generated through the secure WORLDEX backend. Chat messages are kept in this browser session." : "Add OPENAI_API_KEY in your Netlify site's environment variables, enable Functions scope, and redeploy. Never paste the key into this chat or the website frontend."}</p></div><span className={`state-chip ${aiConfigured ? "state-active" : "state-draft"}`}>{aiConfigured ? "READY" : "SETUP"}</span></div>
+        <div className="chat-briefing"><span className="briefing-orbit"><Bot size={16} /></span><div><b>{aiConfigured ? "AURIX is connected to Groq." : "AURIX is waiting for its Groq API configuration."}</b><p>{aiConfigured ? "Replies are generated by Groq through the secure WORLDEX backend. Chat messages are kept in this browser session." : "Add OPENAI_API_KEY in your Netlify site's environment variables, and redeploy. Never paste the key into this chat or the website frontend."}</p></div><span className={`state-chip ${aiConfigured ? "state-active" : "state-draft"}`}>{aiConfigured ? "READY" : "SETUP"}</span></div>
         <div className="chat-transcript" aria-live="polite">
           {!liveMessages.length && !active.messages.length ? <div className="transcript-empty"><div className="dotted-line" /><span>Start talking to AURIX</span><small>Ask a question or describe what you want help with.</small><div className="dotted-line" /></div> : <>
             {active.messages.map((message) => <article className="saved-note" key={message.id}><div className="note-avatar">NOTE</div><div><div className="note-label">SAVED LOCAL NOTE <span>·</span> {timeLabel(message.createdAt)}</div><p>{message.text}</p></div></article>)}
