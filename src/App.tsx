@@ -280,19 +280,6 @@ export default function App() {
     return chat;
   };
 
-  const saveChatDraft = (workspaceId: string, chatId: string, text: string) => {
-    updateWorkspace(workspaceId, (workspace) => ({
-      ...workspace,
-      chats: workspace.chats.map((chat) => chat.id === chatId ? {
-        ...chat,
-        title: chat.messages.length === 0 && chat.title.startsWith("New conversation") ? text.slice(0, 54) : chat.title,
-        updatedAt: timeNow(),
-        state: "draft",
-        messages: [...chat.messages, { id: newId("note"), role: "user", text, createdAt: timeNow(), status: "draft" }],
-      } : chat),
-    }), "Conversation note saved locally");
-  };
-
   const changeChat = (workspaceId: string, chatId: string, change: (chat: Chat) => Chat, label: string) => {
     updateWorkspace(workspaceId, (workspace) => ({ ...workspace, chats: workspace.chats.map((chat) => chat.id === chatId ? change(chat) : chat) }), label);
   };
