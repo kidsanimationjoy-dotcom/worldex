@@ -11,7 +11,6 @@ interface Props {
   signedIn: boolean;
   onCreateHandled: () => void;
   onCreate: (title?: string) => Chat;
-  onSaveDraft: (chatId: string, text: string) => void;
   onRename: (chatId: string, title: string) => void;
   onArchive: (chatId: string, archived: boolean) => void;
 }
@@ -22,7 +21,7 @@ function timeLabel(value: string) {
   return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
 }
 
-export function ChatView({ workspaceId, workspaceName, chats, createSignal, csrfToken, signedIn, onCreateHandled, onCreate, onSaveDraft, onRename, onArchive }: Props) {
+export function ChatView({ workspaceId, workspaceName, chats, createSignal, csrfToken, signedIn, onCreateHandled, onCreate, onRename, onArchive }: Props) {
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
